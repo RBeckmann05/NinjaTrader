@@ -1,0 +1,1021 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.DrawingTools;
+#endregion
+
+//This namespace holds Indicators in this folder and is required. Do not change it. 
+namespace NinjaTrader.NinjaScript.Indicators.BeckFlows
+{
+	public class GlobalAnalyzer : Indicator
+	{
+		
+		#region Price and Indexing
+		double price = 0;
+		int indexer = 0;
+		string indexerStringValue = "";
+		#endregion
+		
+		#region Track Objects
+		List<string> stackedBidImbalanceList = new List<string>();
+		List<string> stackedAskImbalanceList = new List<string>();
+		List<string> thinPrintList = new List<string>();
+		
+		List<string> stackedBidImbalanceTrackerList = new List<string>();
+		List<string> stackedAskImbalanceTrackerList = new List<string>();
+		List<string> thinPrintTrackerList = new List<string>();
+		
+		List<string> vaValueList = new List<string>();
+		List<string> vaTrackerList = new List<string>();
+		List<string> vaAbandonedTrackerList = new List<string>();
+		
+		double doubleSplice = 0;
+		double doubleSplice2 = 0;
+		int intSplice = 0;
+		#endregion
+		
+		#region Bar Direction
+		bool isDevUpBar = false;
+		bool isDevDownBar = false;
+		bool isDevDoji = false;
+		bool isPrevUpBar = false;
+		bool isPrevDownBar = false;
+		bool isPrevDoji = false;
+		double prevBarDelta = 0;
+		double devBarDelta = 0;
+		bool isPrevPosDelta = false;
+		bool isPrevNegDelta = false;
+		#endregion
+		
+		#region Value Area
+		int rotationFactor = 0;
+		double vaMaximum = 0;
+		double vaMaximumPrice = 0;
+		double cumulativeBarVolume = 0;
+		double totalBarVolume = 0;
+		double volume = 0;
+		List<double> pricesforvaluearea = new List<double>();
+		double vaLow = 0;
+		double vaHigh = 0;
+		bool vaTouched = false;
+		#endregion
+		
+		#region Ratios
+		double volRatio1 = 0;
+		double volRatio2 = 0;
+		double volumeRatio = 0;
+		#endregion
+		
+		#region Stacked Imbalances
+		List<bool> askImbalanceBools = new List<bool>();
+		List<bool> bidImbalanceBools = new List<bool>();
+		double ask = 0;
+		double bid = 0;
+		bool askImbalanceOnLevel = false;
+		bool bidImbalanceOnLevel = false;
+		#endregion
+		
+		#region Thin Prints
+		List<bool> thinPrintBools = new List<bool>();
+		bool thinPrintOnLevel = false;
+		double levelVolume = 0;
+		#endregion
+		
+		#region Time and Sales
+		double tasVolume1 = 0;
+		double tasVolume2 = 0;
+		double tasVolume3 = 0;
+		DateTime saveDT = new DateTime();
+		//DateTime dtDifference = new DateTime();
+		#endregion
+		
+		#region Volume Heat
+		List<double> sessionFiveMVolumes = new List<double>();
+		List<double> oneSecondVolumes = new List<double>();
+		double fiveMinuteVol = 0;
+		double sessionAverageVPS = 0;
+		double volStdReturnValue, volStdVariance, volStdAbove, volStdBelow = 0;
+		double oneSecondVolume = 0;
+		#endregion
+		
+		#region Maximum MA
+		List<double> maximumMAPrices = new List<double>();
+		double maximumMAVolume, maximumMAPrice = 0;
+		#endregion
+		
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{
+				#region NinjaScript Defaults
+				Description									= @"Enter the description for your new custom Indicator here.";
+				Name										= "GlobalAnalyzer";
+				Calculate									= Calculate.OnEachTick;
+				IsOverlay									= true;
+				DisplayInDataBox							= true;
+				DrawOnPricePanel							= true;
+				DrawHorizontalGridLines						= true;
+				DrawVerticalGridLines						= true;
+				PaintPriceMarkers							= true;
+				ScaleJustification							= NinjaTrader.Gui.Chart.ScaleJustification.Right;
+				//Disable this property if your indicator requires custom values that cumulate with each new market data event. 
+				//See Help Guide for additional information.
+				IsSuspendedWhileInactive					= true;
+				#endregion
+				
+				#region Algorithm Defaults
+				showStackedImbalances						= true;
+				showValueArea								= true;
+				showThinPrints								= true;
+				showVolumeRatios							= true;
+				showDeltaDirectionDivergences				= true;
+				showBarTandS								= false;
+				showUnfinishedAuctions						= true;
+				showMaximumMA								= false;
+				showPriceHighlight							= true;
+				showUnfinishedBlockOrders					= true;
+				
+				ticksPerLevel 								= 1;
+				significantVolumeRatio 						= .68;
+				imbalanceRatio								= 4;
+				stackedImbalanceLevelMinimum				= 3;
+				valueAreaPct								= .68;
+				stackedThinPrintLevelMinimum				= 2;
+				maximumThinPrintVolume						= 75;
+				thinPrintHighLowOffset						= 2;
+				maximumAbandonedBarPlot						= 100;
+				timeAndSalesDepth							= 10;
+				minimumBidAsk								= 50;
+				trailingAverageMinutes						= 30;
+				maximumMAPeriod								= 12;
+				minimumUBSize								= 1000;
+				
+				globalizeAbandonedVas						= false;
+				globalizeThinPrints							= true;
+				globalizeStackedImbalances					= false;
+				
+				AddPlot(Brushes.Yellow, "maximumMAPlot");
+				#endregion
+			}
+			
+			else if (State == State.Configure)
+			{
+				#region Additional Data Series
+				AddDataSeries(Data.BarsPeriodType.Tick, 1);
+				AddDataSeries(Data.BarsPeriodType.Minute, 3);
+				AddDataSeries(Data.BarsPeriodType.Second, 1);
+				#endregion
+			}
+		}
+
+		protected override void OnBarUpdate()
+		{		
+			
+			#region New Session Draw Objects
+			if (Bars.IsFirstBarOfSession && IsFirstTickOfBar)
+			{
+				Draw.VerticalLine(this, "session" + CurrentBar.ToString(), Time[0], Brushes.White);
+			}
+			#endregion
+			
+			#region Data Loaded Check
+			//if (CurrentBar < 2)
+			//	return;
+			if (CurrentBars[0] < 2 || CurrentBars[1] < 6000 || CurrentBars[2] < 24 || CurrentBars[3] < 2500)
+				return;
+			#endregion
+			
+			#region Volumetric Setup
+			//if (Bars == null)
+          	//	return;
+	        NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType barsType = Bars.BarsSeries.BarsType as    
+	        NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType;
+	        //if (barsType == null)
+	        //  	return;
+			#endregion
+			
+			#region BIP2
+			if (BarsInProgress == 2)
+			{
+				#region Volume Heat
+				if (Bars.IsFirstBarOfSession)
+					sessionFiveMVolumes.Clear();
+				
+				if (showVolumeHeat)
+				{
+					if (IsFirstTickOfBar)
+					{
+						if (Times[0][0].TimeOfDay > new TimeSpan(8, 30, 0)
+						&& Times[0][0].TimeOfDay < new TimeSpan(15, 30, 0))
+						{
+							fiveMinuteVol = Volumes[2][1];
+							Print(fiveMinuteVol);
+							sessionFiveMVolumes.Add(fiveMinuteVol);
+							sessionAverageVPS = (sessionFiveMVolumes.Sum() / sessionFiveMVolumes.Count()) / 60;
+							if (sessionFiveMVolumes.Count() > trailingAverageMinutes / 3)
+								sessionFiveMVolumes.RemoveAt(0);
+							/*
+							volStdReturnValue = sessionFiveMVolumes.Sum(v => Math.Pow(v - (sessionAverageVPS*300), 2)) / (sessionFiveMVolumes.Count()*300);
+							volStdVariance = Math.Sqrt(volStdReturnValue);
+							volStdAbove = sessionAverageVPS + volStdVariance;
+							volStdBelow = sessionAverageVPS - volStdVariance;
+							*/
+						}
+					}
+				}
+				#endregion
+			}
+			#endregion
+			
+			#region BIP3
+			if (BarsInProgress == 3)
+			{
+				#region Volume Heat
+				if (showVolumeHeat)
+				{
+					if (Times[0][0].TimeOfDay > new TimeSpan(8, 30, 0)
+					&& Times[0][0].TimeOfDay < new TimeSpan(15, 30, 0))
+					{
+						Print("Session AVG: " + sessionAverageVPS);
+						Print("VSTDA: " + volStdAbove.ToString());
+						oneSecondVolumes.Add(Volumes[3][0]);
+						if (oneSecondVolumes.Count() > 3)
+							oneSecondVolumes.RemoveAt(0);
+						oneSecondVolume = oneSecondVolumes.Sum();
+						Print("One Second Vol: " + oneSecondVolume.ToString());
+						
+						if (oneSecondVolume > sessionAverageVPS*1.5)
+						{
+							volumeMedColor = Brushes.Red;
+						}
+						
+						else if (oneSecondVolume < sessionAverageVPS/1.5)
+						{
+							volumeMedColor = Brushes.Blue;
+						}
+						
+						else
+						{
+							volumeMedColor = Brushes.Yellow;
+						}
+						
+						Draw.TextFixed(this, "NinjaScriptInfo",
+						"VPS: " + oneSecondVolume.ToString(),
+						TextPosition.TopRight,
+						ChartControl.Properties.ChartText,
+						ChartControl.Properties.LabelFont,
+						Brushes.Black, volumeMedColor, 100);
+					}
+				}
+				#endregion
+			}
+			#endregion
+			
+			#region BIP0
+			if (BarsInProgress == 0)
+			{
+				#region Developing Bar Direction
+				if (Open[0] < Close[0])
+				{
+					isDevUpBar = true;
+					isDevDownBar = false;
+					isDevDoji = false;
+				}
+				else if (Open[0] > Close[0])
+				{
+					isDevUpBar = false;
+					isDevDownBar = true;
+					isDevDoji = false;
+				}
+				else if (Open[0] == Close[0])
+				{
+					isDevUpBar = false;
+					isDevDownBar = false;
+					isDevDoji = true;
+				}
+				#endregion
+				
+			 //////////////////////	
+				#region isFirstTickOfBar
+				if (IsFirstTickOfBar)
+				{
+					TimeSpan dtDifference = Time[1] - Time[2];
+					double minutesDifference = dtDifference.TotalMinutes*2;
+					saveDT = Time[0];
+						
+					saveDT = saveDT.AddMinutes(minutesDifference);
+					
+					#region Abandoned Value Area
+					price = Low[1]; // Set price to low for looping price levels
+					vaTouched = false;
+					while (price <= High[1])
+					{
+						if (price >= vaLow
+							&& price <= vaHigh
+							&& CurrentBar > 2) // To ensure a value area has loaded before calling
+						{
+							vaTouched = true;
+						}
+						price = price + TickSize;
+					}
+					
+					if (!vaTouched 
+						&& CurrentBar > 2
+						&& vaTrackerList.Count > 0)
+					{
+						vaAbandonedTrackerList.Add(vaTrackerList.Last());
+					}
+					#endregion // MUST BE IN PROGRAM BEFORE VALUE AREA CALCULATION
+					
+					#region Object Removal Process
+					//Print("Running Removal Process");
+					price = Low[1]; // Set price to low of bar for looping prices
+					while (price <= High[1])
+					{
+						//Print("Entering While Loop - Removal Process");
+						
+	//					Print("Removing Demand");
+						if (stackedAskImbalanceList.Contains("Demand" + price.ToString()))
+						{
+	//						RemoveDrawObject("Supply" + price.ToString());
+							indexer = stackedAskImbalanceList.IndexOf("Demand" + price.ToString());
+							stackedAskImbalanceList.Remove("Demand" + price.ToString());
+							stackedAskImbalanceTrackerList.RemoveAt(indexer);
+						}
+						
+	//					Print("Removing Supply");
+						if (stackedBidImbalanceList.Contains("Supply" + price.ToString()))
+						{
+	//						RemoveDrawObject("Demand" + price.ToString());
+							indexer = stackedBidImbalanceList.IndexOf("Supply" + price.ToString());
+							stackedBidImbalanceList.Remove("Supply" + price.ToString());
+							stackedBidImbalanceTrackerList.RemoveAt(indexer);
+						}
+						
+	//					Print("Removing Thin Prints");
+						if (thinPrintList.Contains("Thin Spot" + price.ToString()))
+						{
+	//						RemoveDrawObject("Thin Spot" + price.ToString());
+							indexer = thinPrintList.IndexOf("Thin Spot" + price.ToString());
+							thinPrintList.Remove("Thin Spot" + price.ToString());
+							thinPrintTrackerList.RemoveAt(indexer);
+						}
+						
+	//					if (vaValueList) // Make removal process for abandoned value areas
+						foreach(var Obj in vaAbandonedTrackerList.ToList())
+						{
+							string[] splicerValues = Obj.Split(',');
+							doubleSplice = double.Parse(splicerValues[1].Trim()); // vaHigh
+							doubleSplice2 = double.Parse(splicerValues[2].Trim()); // vaLow
+							
+							if (price >= doubleSplice2
+								&& price <= doubleSplice)
+							{
+								//if (vaAbandonedTrackerList.Contains(Obj))
+								//	Print("Passed");
+								vaAbandonedTrackerList.Remove(Obj); // Problem Here
+							}
+						}
+						
+						price = price + TickSize;
+					}
+					#endregion
+					
+					#region Object Updater //// MAJOR: AFTER DOUBLE SPLICES, TICK SIZE ADJUSTOR ADDED TO ACCOUNT FOR GAY ASS DRAW OBJECT MECHANICS (TickSize*.5). THIS COULD CAUSE FUTURE ISSUES
+					foreach (var Obj in thinPrintTrackerList)
+					{
+	//					Print("Attempting Splice - Thin Prints");
+						string[] splicerValues = Obj.Split(',');
+						intSplice = int.Parse(splicerValues[0].Trim());
+						doubleSplice = double.Parse(splicerValues[1].Trim());
+						Draw.Rectangle(this, Obj, CurrentBar - intSplice+1, doubleSplice-(TickSize*.5), 0, doubleSplice-(TickSize*.5) + (TickSize * ticksPerLevel * stackedThinPrintLevelMinimum), globalizeThinPrints, "ThinPrint");
+						//Draw.Rectangle(this, Obj, false, CurrentBar - intSplice, doubleSplice + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), 0, doubleSplice, Brushes.Transparent, Brushes.White, 25);
+					}
+					
+					foreach (var Obj in stackedAskImbalanceTrackerList)
+					{
+	//					Print("Attempting Splice - Ask Imbalances");
+						string[] splicerValues = Obj.Split(',');
+						intSplice = int.Parse(splicerValues[0].Trim());
+						doubleSplice = double.Parse(splicerValues[1].Trim());
+						Draw.Rectangle(this, Obj, CurrentBar - intSplice+1, doubleSplice-(TickSize*1.5), 0, doubleSplice-(TickSize*1.5) + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), globalizeStackedImbalances, "AskImbalance");
+						//Draw.Rectangle(this, Obj, false, CurrentBar - intSplice, doubleSplice + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), 0, doubleSplice, Brushes.Transparent, Brushes.Cyan, 25);
+					}
+					
+					foreach (var Obj in stackedBidImbalanceTrackerList)
+					{
+						//Print("Attempting Splice - Bid Imbalances");
+						string[] splicerValues = Obj.Split(',');
+						intSplice = int.Parse(splicerValues[0].Trim());
+						doubleSplice = double.Parse(splicerValues[1].Trim());
+						Draw.Rectangle(this, Obj, CurrentBar - intSplice+1, doubleSplice-(TickSize*1.5), 0, doubleSplice-(TickSize*1.5) + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), globalizeStackedImbalances, "BidImbalance");
+						//Draw.Rectangle(this, Obj, false, CurrentBar - intSplice, doubleSplice + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), 0, doubleSplice, Brushes.Transparent, Brushes.Magenta, 25);
+					}
+					
+					foreach (var Obj in vaAbandonedTrackerList)
+					{
+						//Print("Attempting Splice - Abandonded VA");
+						string[] splicerValues = Obj.Split(',');
+						intSplice = int.Parse(splicerValues[0].Trim());
+						doubleSplice = double.Parse(splicerValues[1].Trim()); // VA High
+						doubleSplice2 = double.Parse(splicerValues[2].Trim()); // VA Low
+						if (CurrentBar - intSplice+1 <= maximumAbandonedBarPlot)
+							Draw.Rectangle(this, Obj, CurrentBar - intSplice+1, doubleSplice+(TickSize*.5), 0, doubleSplice2-(TickSize*.5), globalizeAbandonedVas, "AbandonedVA");
+							//Draw.Rectangle(this, Obj, false, CurrentBar - intSplice+1, doubleSplice, 0, doubleSplice2, Brushes.Transparent, Brushes.Yellow, 20);
+					}
+					#endregion
+					
+					#region Previous Bar Direction
+					//Print("Running Previous Bar Direction");
+					if (Open[1] < Close[1])
+					{
+						isPrevUpBar = true;
+						isPrevDownBar = false;
+						isPrevDoji = false;
+					}
+					else if (Open[1] > Close[1])
+					{
+						isPrevUpBar = false;
+						isPrevDownBar = true;
+						isPrevDoji = false;
+					}
+					else if (Open[1] == Close[1])
+					{
+						isPrevUpBar = false;
+						isPrevDownBar = false;
+						isPrevDoji = true;
+					}
+					#endregion
+					
+					#region Previous Bar Delta
+					prevBarDelta =  barsType.Volumes[CurrentBar-1].BarDelta;
+					#endregion
+					
+					#region Value Area
+					if (showValueArea)
+					{
+						//Print("Running Value Area");
+						rotationFactor = 1;
+						vaMaximum = barsType.Volumes[CurrentBar-1].GetMaximumVolume(null, out vaMaximumPrice);
+						price = vaMaximumPrice; // Set price to maximum price for helix looping price levels
+						cumulativeBarVolume = 0;
+						cumulativeBarVolume = cumulativeBarVolume + vaMaximum;
+						totalBarVolume = VOL()[1];
+						pricesforvaluearea.Clear();
+						while (cumulativeBarVolume <= (totalBarVolume * valueAreaPct))
+						{
+							//Print("Entering While Loop - Value Area");
+							if (cumulativeBarVolume <= (totalBarVolume * valueAreaPct))
+							{
+								price = price + (TickSize * rotationFactor * ticksPerLevel);
+								if (price <= High[1])
+								{
+									volume = barsType.Volumes[CurrentBar-1].GetTotalVolumeForPrice(price);
+									cumulativeBarVolume = cumulativeBarVolume + volume;
+									pricesforvaluearea.Add(price);
+								}
+								rotationFactor = rotationFactor + 1;
+							}
+							if (cumulativeBarVolume <= (totalBarVolume * valueAreaPct))
+							{
+								price = price - (TickSize * rotationFactor * ticksPerLevel);
+								if (price >= Low[1])
+								{
+									volume = barsType.Volumes[CurrentBar-1].GetTotalVolumeForPrice(price);
+									cumulativeBarVolume = cumulativeBarVolume + volume;
+									pricesforvaluearea.Add(price);
+								}
+								rotationFactor = rotationFactor + 1;
+							}
+							if (cumulativeBarVolume <= 0 || totalBarVolume <= 0 || price < 0)
+							{
+								break;
+							}
+						}
+						pricesforvaluearea.Sort();
+						if (pricesforvaluearea.Count() > 0)
+						{
+							vaLow = pricesforvaluearea[0];
+							vaHigh = pricesforvaluearea[pricesforvaluearea.Count - 1];
+							Draw.Rectangle(this, "Value Area", 1, vaHigh+(TickSize*.5), 0, vaLow-(TickSize*.5), false, "Value Area");
+							vaValueList.Add("Value Area," + vaHigh.ToString() + "," + vaLow.ToString());
+							vaTrackerList.Add(CurrentBar.ToString() + "," + vaHigh.ToString() + "," + vaLow.ToString());
+						}
+					}
+					#endregion
+					
+					#region Stacked Imbalances
+					if (showStackedImbalances)
+					{
+						//Print("Running Stacked Imbalances");
+						price = Low[1]; // Set price to low of bar for looping prices
+						while (price <= High[1])
+						{
+							askImbalanceBools.Clear();
+							bidImbalanceBools.Clear();
+							foreach (int Level in Enumerable.Range(0, stackedImbalanceLevelMinimum))
+							{
+								ask = barsType.Volumes[CurrentBar-1].GetAskVolumeForPrice(price + (Level * TickSize * ticksPerLevel));
+								bid = barsType.Volumes[CurrentBar-1].GetBidVolumeForPrice(price + (Level * TickSize * ticksPerLevel));
+								
+								if (ask/bid >= imbalanceRatio)
+								{
+									askImbalanceOnLevel = true;
+									bidImbalanceOnLevel = false;
+									
+									askImbalanceBools.Add(askImbalanceOnLevel);
+									bidImbalanceBools.Add(bidImbalanceOnLevel);
+								}
+								else if (bid/ask >= imbalanceRatio)
+								{
+									askImbalanceOnLevel = false;
+									bidImbalanceOnLevel = true;
+									
+									askImbalanceBools.Add(askImbalanceOnLevel);
+									bidImbalanceBools.Add(bidImbalanceOnLevel);
+								}
+								else
+								{
+									askImbalanceOnLevel = false;
+									bidImbalanceOnLevel = false;
+									
+									askImbalanceBools.Add(askImbalanceOnLevel);
+									bidImbalanceBools.Add(bidImbalanceOnLevel);
+								}
+							}
+							
+							if (!askImbalanceBools.Contains(false))
+							{
+	//							Draw.RegionHighlightY(this, "Demand" + price.ToString(), price + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), price, false, "Demand");
+								Draw.Rectangle(this, "Demand" + price.ToString(), 1, price-(TickSize*.5) + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), 0, price-(TickSize*.5), Brushes.Cyan);
+								stackedAskImbalanceList.Add("Demand" + (price + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum) - TickSize*ticksPerLevel).ToString());
+								stackedAskImbalanceTrackerList.Add(CurrentBar.ToString() + "," + (price+TickSize).ToString());
+							}
+							
+							if (!bidImbalanceBools.Contains(false))
+							{
+	//							Draw.RegionHighlightY(this, "Supply" + price.ToString(), price + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), price, false, "Supply");
+								Draw.Rectangle(this, "Supply" + price.ToString(), 1, price-(TickSize*.5) + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), 0, price-(TickSize*.5), Brushes.Magenta);
+								stackedBidImbalanceList.Add("Supply" + price.ToString());
+								stackedBidImbalanceTrackerList.Add(CurrentBar.ToString() + "," + (price+TickSize).ToString());
+							}
+							
+							price = price + (TickSize * ticksPerLevel);
+						}
+					}
+					#endregion
+					
+					#region Thin Prints
+					if (showThinPrints)
+					{
+						price = Low[1]; // Set price to low of bar for looping prices
+						while (price <= High[1])
+						{
+							thinPrintBools.Clear();
+							foreach (int Level in Enumerable.Range(0, stackedThinPrintLevelMinimum))
+							{
+								ask = barsType.Volumes[CurrentBar-1].GetAskVolumeForPrice(price + (Level * TickSize * ticksPerLevel));
+								bid = barsType.Volumes[CurrentBar-1].GetBidVolumeForPrice(price + (Level * TickSize * ticksPerLevel));
+								levelVolume = ask + bid;
+								if (levelVolume <= maximumThinPrintVolume
+									&& price <= High[1] - (thinPrintHighLowOffset*TickSize*ticksPerLevel)
+									&& price >= Low[1] + (thinPrintHighLowOffset*TickSize*ticksPerLevel))
+								{
+									thinPrintOnLevel = true;
+									
+									thinPrintBools.Add(thinPrintOnLevel);
+								}
+								else
+								{
+									thinPrintOnLevel = false;
+									
+									thinPrintBools.Add(thinPrintOnLevel);
+								}
+							}
+							
+							if (!thinPrintBools.Contains(false))
+							{
+								//Draw.RegionHighlightY(this, "Thin Spot" + price.ToString(), price + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), price, false, "Thin Spot");
+								Draw.Rectangle(this, "Thin Spot" + price.ToString(), 1, price-(TickSize*.5) + (TickSize * ticksPerLevel * stackedThinPrintLevelMinimum), 0, price-(TickSize*.5), Brushes.White);
+								thinPrintList.Add("Thin Spot" + price.ToString());
+								thinPrintTrackerList.Add(CurrentBar.ToString() + "," + price.ToString());
+							}
+							
+							price = price + (TickSize * ticksPerLevel);
+						}
+					}
+					#endregion
+					
+					#region Unfinished Auctions
+					if (showUnfinishedAuctions)
+					{
+						ask = barsType.Volumes[CurrentBar-1].GetAskVolumeForPrice(Lows[0][1]);
+						if (ask >= minimumBidAsk)
+							Draw.ArrowUp(this, "UAU" + CurrentBar.ToString(), true, Time[1], Lows[0][1] - TickSize*2, Brushes.Cyan);
+						bid = barsType.Volumes[CurrentBar-1].GetBidVolumeForPrice(Highs[0][1]);
+						if (bid >= minimumBidAsk)
+							Draw.ArrowDown(this, "UAD" + CurrentBar.ToString(), true, Time[1], Highs[0][1] + TickSize*2, Brushes.Magenta);
+					}
+					#endregion
+					
+					#region Maximum MA
+					if (showMaximumMA)
+					{
+						maximumMAVolume = barsType.Volumes[CurrentBar-1].GetMaximumVolume(null, out maximumMAPrice);
+						maximumMAPrices.Add(maximumMAPrice);
+						if (maximumMAPrices.Count() > maximumMAPeriod)
+							maximumMAPrices.RemoveAt(0);
+						maximumMAPlot[0] = maximumMAPrices.Sum() / maximumMAPrices.Count();
+					}
+					#endregion
+					
+					#region Unfinished Block Orders
+					if (showUnfinishedBlockOrders)
+					{
+						ask = barsType.Volumes[CurrentBar-1].GetAskVolumeForPrice(Highs[0][1]);
+						if (ask > minimumUBSize)
+							Draw.Ellipse(this, "Circle" + CurrentBar.ToString(), 2, Highs[0][1]+TickSize, 0, Highs[0][1]-TickSize, Brushes.Magenta);
+							
+							
+						bid = barsType.Volumes[CurrentBar-1].GetBidVolumeForPrice(Lows[0][1]);
+						if (bid > minimumUBSize)
+							Draw.Ellipse(this, "Circle" + CurrentBar.ToString(), 2, Lows[0][1]+TickSize, 0, Lows[0][1]-TickSize, Brushes.Cyan);
+					}
+					#endregion
+				}
+				#endregion
+			 //////////////////////
+				
+				#region Divergences
+				if (showDeltaDirectionDivergences)
+				{
+					devBarDelta =  barsType.Volumes[CurrentBar].BarDelta;
+					if (isDevUpBar && devBarDelta < 0)
+						BarBrush = Brushes.Cyan;
+					else if (isDevDownBar && devBarDelta > 0)
+						BarBrush = Brushes.Magenta;
+					else
+						BarBrush = null;
+				}
+				#endregion
+				
+				#region Ratios
+				if (showVolumeRatios)
+				{
+					if (isDevDownBar)
+					{
+						price = High[0];
+						volRatio1 = barsType.Volumes[CurrentBar].GetAskVolumeForPrice(price);
+						volRatio2 = barsType.Volumes[CurrentBar].GetAskVolumeForPrice(price-(TickSize*ticksPerLevel));
+						volumeRatio = volRatio2 / volRatio1;
+						volumeRatio = Math.Round(volumeRatio, 2);
+						if (volumeRatio < significantVolumeRatio)
+						{
+							Draw.Text(this, CurrentBar.ToString(), volumeRatio.ToString(), 0, High[0]+(TickSize*4), Brushes.Magenta);
+						}
+						else
+						{
+							Draw.Text(this, CurrentBar.ToString(), volumeRatio.ToString(), 0, High[0]+(TickSize*4), Brushes.Transparent);
+						}
+					}
+					
+					else if (isDevUpBar)
+					{
+						price = Low[0];
+						volRatio1 = barsType.Volumes[CurrentBar].GetBidVolumeForPrice(price);
+						volRatio2 = barsType.Volumes[CurrentBar].GetBidVolumeForPrice(price+(TickSize*ticksPerLevel));
+						volumeRatio = volRatio2 / volRatio1;
+						volumeRatio = Math.Round(volumeRatio, 2);
+						if (volumeRatio < significantVolumeRatio)
+						{
+							Draw.Text(this, CurrentBar.ToString(), volumeRatio.ToString(), 0, Low[0]-(TickSize*2), Brushes.Cyan);
+						}
+						else
+						{
+							Draw.Text(this, CurrentBar.ToString(), volumeRatio.ToString(), 0, Low[0]-(TickSize*2), Brushes.Transparent);
+						}
+					}
+				}
+				#endregion
+				
+				#region Price Highlight
+				if (showPriceHighlight)
+				{
+					double PHask = GetCurrentAsk();
+					double PHbid = GetCurrentBid();
+					Draw.HorizontalLine(this, "PHask", PHask, Brushes.LimeGreen);
+					Draw.HorizontalLine(this, "PHtop", false, Close[0]+(TickSize*.5), Brushes.White, DashStyleHelper.Dash, 1);
+					Draw.RegionHighlightY(this, "PHarea", false, Close[0]+(TickSize*.5), Close[0]-(TickSize*.5), Brushes.Transparent, Brushes.White, 25);
+					Draw.HorizontalLine(this, "PHbottom", false, Close[0]-(TickSize*.5), Brushes.White, DashStyleHelper.Dash, 1);
+					Draw.HorizontalLine(this, "PHbid", PHbid, Brushes.Red);
+				}
+				#endregion
+			}
+			#endregion
+			
+			#region Bar Time and Sales
+			if (showBarTandS)
+			{
+				if (BarsInProgress == 0)
+				{
+					/*
+					NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType barsType1 = BarsArray[1].BarsType as
+       				NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType;
+					*/
+					
+					NinjaTrader.Gui.Tools.SimpleFont myFont = new NinjaTrader.Gui.Tools.SimpleFont("Courier New", 12) { Size = 10, Bold = true };
+					foreach (int Level in Enumerable.Range(0, timeAndSalesDepth))
+					{
+						
+						if (Closes[1][Level] > Closes[1][Level+1])
+							textColor = Brushes.LimeGreen;
+
+						else if (Closes[1][Level] < Closes[1][Level+1])
+							textColor = Brushes.Red;
+						
+						else if (Closes[1][Level] == Closes[1][Level+1])
+							textColor = Brushes.White;
+						
+						tasVolume1 = VOL(BarsArray[1])[Level];
+						Draw.Text(this, "TAS" + Level.ToString(), false, tasVolume1.ToString(), saveDT, Close[0], 10 + (18 * Level), textColor, myFont, TextAlignment.Right, Brushes.Transparent, Brushes.Transparent, 100);
+					}
+				}
+				
+			}
+			#endregion
+			
+		}
+		
+		#region Set Data Defaults
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="ticksPerLevel", Order=1, GroupName="_SetDefaults_")]
+		public int ticksPerLevel
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="globalizeAbandonedVas", Order=2, GroupName="_SetDefaults_")]
+		public bool globalizeAbandonedVas
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="globalizeThinPrints", Order=3, GroupName="_SetDefaults_")]
+		public bool globalizeThinPrints
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="globalizeStackedImbalances", Order=4, GroupName="_SetDefaults_")]
+		public bool globalizeStackedImbalances
+		{ get; set; }
+		#endregion
+		
+		#region Stacked Imbalances
+		[NinjaScriptProperty]
+		[Display(Name="showStackedImbalances", Order=1, GroupName="Stacked Imbalances")]
+		public bool showStackedImbalances
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="imbalanceRatio", Order=2, GroupName="Stacked Imbalances")]
+		public int imbalanceRatio
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="stackedImbalanceLevelMinimum", Order=3, GroupName="Stacked Imbalances")]
+		public int stackedImbalanceLevelMinimum
+		{ get; set; }
+		#endregion
+		
+		#region Value Area
+		[NinjaScriptProperty]
+		[Display(Name="showValueArea", Order=1, GroupName="Value Area")]
+		public bool showValueArea
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="valueAreaPct", Order=2, GroupName="Value Area")]
+		public double valueAreaPct
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="maximumAbandonedBarPlot", Order=3, GroupName="Value Area")]
+		public int maximumAbandonedBarPlot
+		{ get; set; }
+		#endregion
+		
+		#region Thin Prints
+		[NinjaScriptProperty]
+		[Display(Name="showThinPrints", Order=1, GroupName="Thin Prints")]
+		public bool showThinPrints
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="maximumThinPrintVolume", Order=2, GroupName="Thin Prints")]
+		public int maximumThinPrintVolume
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="stackedThinPrintLevelMinimum", Order=3, GroupName="Thin Prints")]
+		public int stackedThinPrintLevelMinimum
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="thinPrintHighLowOffset", Order=4, GroupName="Thin Prints")]
+		public int thinPrintHighLowOffset
+		{ get; set; }
+		#endregion
+		
+		#region Volume Ratios
+		[NinjaScriptProperty]
+		[Display(Name="showVolumeRatios", Order=1, GroupName="Volume Ratios")]
+		public bool showVolumeRatios
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="significantVolumeRatio", Order=2, GroupName="Volume Ratios")]
+		public double significantVolumeRatio
+		{ get; set; }
+		#endregion
+		
+		#region Divergences
+		[NinjaScriptProperty]
+		[Display(Name="showDeltaDirectionDivergences", Order=1, GroupName="Divergences")]
+		public bool showDeltaDirectionDivergences
+		{ get; set; }
+		#endregion
+		
+		#region Time and Sales
+		[NinjaScriptProperty]
+		[Display(Name="showBarTandS", Order=1, GroupName="Time and Sales")]
+		public bool showBarTandS
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[XmlIgnore]
+		[Display(Name="textColor", Order=2, GroupName="Time and Sales")]
+		public Brush textColor
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="timeAndSalesDepth", Order=3, GroupName="Time and Sales")]
+		public int timeAndSalesDepth
+		{ get; set; }
+		#endregion
+		
+		#region Unfinished Auctions
+		[NinjaScriptProperty]
+		[Display(Name="showUnfinishedAuctions", Order=1, GroupName="Unfinished Auctions")]
+		public bool showUnfinishedAuctions
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="minimumBidAsk", Order=3, GroupName="Unfinished Auctions")]
+		public int minimumBidAsk
+		{ get; set; }
+		#endregion
+		
+		#region Volume Heat
+		[NinjaScriptProperty]
+		[Display(Name="showVolumeHeat", Order=1, GroupName="Volume Heat")]
+		public bool showVolumeHeat
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[XmlIgnore]
+		[Display(Name="volumeMedColor", Order=2, GroupName="Volume Heat")]
+		public Brush volumeMedColor
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="trailingAverageMinutes", Order=3, GroupName="Volume Heat")]
+		public int trailingAverageMinutes
+		{ get; set; }
+		#endregion
+		
+		#region Maximum Moving Average
+		[NinjaScriptProperty]
+		[Display(Name="showMaximumMA", Order=1, GroupName="Maximum Moving Average")]
+		public bool showMaximumMA
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="maximumMAPeriod", Order=2, GroupName="Maximum Moving Average")]
+		public int maximumMAPeriod
+		{ get; set; }
+		
+		[Browsable(false)]
+		[XmlIgnore]
+		public Series<double> maximumMAPlot
+		{
+			get { return Values[0]; }
+		}
+		#endregion
+		
+		#region Price Highlight
+		[NinjaScriptProperty]
+		[Display(Name="showPriceHighlight", Order=1, GroupName="Price Highlight")]
+		public bool showPriceHighlight
+		{ get; set; }
+		#endregion
+		
+		#region Unfinished Block Orders
+		[NinjaScriptProperty]
+		[Display(Name="showUnfinishedBlockOrders", Order=1, GroupName="Unfinished Block Orders")]
+		public bool showUnfinishedBlockOrders
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="minimumUBSize", Order=2, GroupName="Unfinished Block Orders")]
+		public int minimumUBSize
+		{ get; set; }
+		#endregion
+	}
+	
+}
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private BeckFlows.GlobalAnalyzer[] cacheGlobalAnalyzer;
+		public BeckFlows.GlobalAnalyzer GlobalAnalyzer(int ticksPerLevel, bool globalizeAbandonedVas, bool globalizeThinPrints, bool globalizeStackedImbalances, bool showStackedImbalances, int imbalanceRatio, int stackedImbalanceLevelMinimum, bool showValueArea, double valueAreaPct, int maximumAbandonedBarPlot, bool showThinPrints, int maximumThinPrintVolume, int stackedThinPrintLevelMinimum, int thinPrintHighLowOffset, bool showVolumeRatios, double significantVolumeRatio, bool showDeltaDirectionDivergences, bool showBarTandS, Brush textColor, int timeAndSalesDepth, bool showUnfinishedAuctions, int minimumBidAsk, bool showVolumeHeat, Brush volumeMedColor, int trailingAverageMinutes, bool showMaximumMA, int maximumMAPeriod, bool showPriceHighlight, bool showUnfinishedBlockOrders, int minimumUBSize)
+		{
+			return GlobalAnalyzer(Input, ticksPerLevel, globalizeAbandonedVas, globalizeThinPrints, globalizeStackedImbalances, showStackedImbalances, imbalanceRatio, stackedImbalanceLevelMinimum, showValueArea, valueAreaPct, maximumAbandonedBarPlot, showThinPrints, maximumThinPrintVolume, stackedThinPrintLevelMinimum, thinPrintHighLowOffset, showVolumeRatios, significantVolumeRatio, showDeltaDirectionDivergences, showBarTandS, textColor, timeAndSalesDepth, showUnfinishedAuctions, minimumBidAsk, showVolumeHeat, volumeMedColor, trailingAverageMinutes, showMaximumMA, maximumMAPeriod, showPriceHighlight, showUnfinishedBlockOrders, minimumUBSize);
+		}
+
+		public BeckFlows.GlobalAnalyzer GlobalAnalyzer(ISeries<double> input, int ticksPerLevel, bool globalizeAbandonedVas, bool globalizeThinPrints, bool globalizeStackedImbalances, bool showStackedImbalances, int imbalanceRatio, int stackedImbalanceLevelMinimum, bool showValueArea, double valueAreaPct, int maximumAbandonedBarPlot, bool showThinPrints, int maximumThinPrintVolume, int stackedThinPrintLevelMinimum, int thinPrintHighLowOffset, bool showVolumeRatios, double significantVolumeRatio, bool showDeltaDirectionDivergences, bool showBarTandS, Brush textColor, int timeAndSalesDepth, bool showUnfinishedAuctions, int minimumBidAsk, bool showVolumeHeat, Brush volumeMedColor, int trailingAverageMinutes, bool showMaximumMA, int maximumMAPeriod, bool showPriceHighlight, bool showUnfinishedBlockOrders, int minimumUBSize)
+		{
+			if (cacheGlobalAnalyzer != null)
+				for (int idx = 0; idx < cacheGlobalAnalyzer.Length; idx++)
+					if (cacheGlobalAnalyzer[idx] != null && cacheGlobalAnalyzer[idx].ticksPerLevel == ticksPerLevel && cacheGlobalAnalyzer[idx].globalizeAbandonedVas == globalizeAbandonedVas && cacheGlobalAnalyzer[idx].globalizeThinPrints == globalizeThinPrints && cacheGlobalAnalyzer[idx].globalizeStackedImbalances == globalizeStackedImbalances && cacheGlobalAnalyzer[idx].showStackedImbalances == showStackedImbalances && cacheGlobalAnalyzer[idx].imbalanceRatio == imbalanceRatio && cacheGlobalAnalyzer[idx].stackedImbalanceLevelMinimum == stackedImbalanceLevelMinimum && cacheGlobalAnalyzer[idx].showValueArea == showValueArea && cacheGlobalAnalyzer[idx].valueAreaPct == valueAreaPct && cacheGlobalAnalyzer[idx].maximumAbandonedBarPlot == maximumAbandonedBarPlot && cacheGlobalAnalyzer[idx].showThinPrints == showThinPrints && cacheGlobalAnalyzer[idx].maximumThinPrintVolume == maximumThinPrintVolume && cacheGlobalAnalyzer[idx].stackedThinPrintLevelMinimum == stackedThinPrintLevelMinimum && cacheGlobalAnalyzer[idx].thinPrintHighLowOffset == thinPrintHighLowOffset && cacheGlobalAnalyzer[idx].showVolumeRatios == showVolumeRatios && cacheGlobalAnalyzer[idx].significantVolumeRatio == significantVolumeRatio && cacheGlobalAnalyzer[idx].showDeltaDirectionDivergences == showDeltaDirectionDivergences && cacheGlobalAnalyzer[idx].showBarTandS == showBarTandS && cacheGlobalAnalyzer[idx].textColor == textColor && cacheGlobalAnalyzer[idx].timeAndSalesDepth == timeAndSalesDepth && cacheGlobalAnalyzer[idx].showUnfinishedAuctions == showUnfinishedAuctions && cacheGlobalAnalyzer[idx].minimumBidAsk == minimumBidAsk && cacheGlobalAnalyzer[idx].showVolumeHeat == showVolumeHeat && cacheGlobalAnalyzer[idx].volumeMedColor == volumeMedColor && cacheGlobalAnalyzer[idx].trailingAverageMinutes == trailingAverageMinutes && cacheGlobalAnalyzer[idx].showMaximumMA == showMaximumMA && cacheGlobalAnalyzer[idx].maximumMAPeriod == maximumMAPeriod && cacheGlobalAnalyzer[idx].showPriceHighlight == showPriceHighlight && cacheGlobalAnalyzer[idx].showUnfinishedBlockOrders == showUnfinishedBlockOrders && cacheGlobalAnalyzer[idx].minimumUBSize == minimumUBSize && cacheGlobalAnalyzer[idx].EqualsInput(input))
+						return cacheGlobalAnalyzer[idx];
+			return CacheIndicator<BeckFlows.GlobalAnalyzer>(new BeckFlows.GlobalAnalyzer(){ ticksPerLevel = ticksPerLevel, globalizeAbandonedVas = globalizeAbandonedVas, globalizeThinPrints = globalizeThinPrints, globalizeStackedImbalances = globalizeStackedImbalances, showStackedImbalances = showStackedImbalances, imbalanceRatio = imbalanceRatio, stackedImbalanceLevelMinimum = stackedImbalanceLevelMinimum, showValueArea = showValueArea, valueAreaPct = valueAreaPct, maximumAbandonedBarPlot = maximumAbandonedBarPlot, showThinPrints = showThinPrints, maximumThinPrintVolume = maximumThinPrintVolume, stackedThinPrintLevelMinimum = stackedThinPrintLevelMinimum, thinPrintHighLowOffset = thinPrintHighLowOffset, showVolumeRatios = showVolumeRatios, significantVolumeRatio = significantVolumeRatio, showDeltaDirectionDivergences = showDeltaDirectionDivergences, showBarTandS = showBarTandS, textColor = textColor, timeAndSalesDepth = timeAndSalesDepth, showUnfinishedAuctions = showUnfinishedAuctions, minimumBidAsk = minimumBidAsk, showVolumeHeat = showVolumeHeat, volumeMedColor = volumeMedColor, trailingAverageMinutes = trailingAverageMinutes, showMaximumMA = showMaximumMA, maximumMAPeriod = maximumMAPeriod, showPriceHighlight = showPriceHighlight, showUnfinishedBlockOrders = showUnfinishedBlockOrders, minimumUBSize = minimumUBSize }, input, ref cacheGlobalAnalyzer);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.BeckFlows.GlobalAnalyzer GlobalAnalyzer(int ticksPerLevel, bool globalizeAbandonedVas, bool globalizeThinPrints, bool globalizeStackedImbalances, bool showStackedImbalances, int imbalanceRatio, int stackedImbalanceLevelMinimum, bool showValueArea, double valueAreaPct, int maximumAbandonedBarPlot, bool showThinPrints, int maximumThinPrintVolume, int stackedThinPrintLevelMinimum, int thinPrintHighLowOffset, bool showVolumeRatios, double significantVolumeRatio, bool showDeltaDirectionDivergences, bool showBarTandS, Brush textColor, int timeAndSalesDepth, bool showUnfinishedAuctions, int minimumBidAsk, bool showVolumeHeat, Brush volumeMedColor, int trailingAverageMinutes, bool showMaximumMA, int maximumMAPeriod, bool showPriceHighlight, bool showUnfinishedBlockOrders, int minimumUBSize)
+		{
+			return indicator.GlobalAnalyzer(Input, ticksPerLevel, globalizeAbandonedVas, globalizeThinPrints, globalizeStackedImbalances, showStackedImbalances, imbalanceRatio, stackedImbalanceLevelMinimum, showValueArea, valueAreaPct, maximumAbandonedBarPlot, showThinPrints, maximumThinPrintVolume, stackedThinPrintLevelMinimum, thinPrintHighLowOffset, showVolumeRatios, significantVolumeRatio, showDeltaDirectionDivergences, showBarTandS, textColor, timeAndSalesDepth, showUnfinishedAuctions, minimumBidAsk, showVolumeHeat, volumeMedColor, trailingAverageMinutes, showMaximumMA, maximumMAPeriod, showPriceHighlight, showUnfinishedBlockOrders, minimumUBSize);
+		}
+
+		public Indicators.BeckFlows.GlobalAnalyzer GlobalAnalyzer(ISeries<double> input , int ticksPerLevel, bool globalizeAbandonedVas, bool globalizeThinPrints, bool globalizeStackedImbalances, bool showStackedImbalances, int imbalanceRatio, int stackedImbalanceLevelMinimum, bool showValueArea, double valueAreaPct, int maximumAbandonedBarPlot, bool showThinPrints, int maximumThinPrintVolume, int stackedThinPrintLevelMinimum, int thinPrintHighLowOffset, bool showVolumeRatios, double significantVolumeRatio, bool showDeltaDirectionDivergences, bool showBarTandS, Brush textColor, int timeAndSalesDepth, bool showUnfinishedAuctions, int minimumBidAsk, bool showVolumeHeat, Brush volumeMedColor, int trailingAverageMinutes, bool showMaximumMA, int maximumMAPeriod, bool showPriceHighlight, bool showUnfinishedBlockOrders, int minimumUBSize)
+		{
+			return indicator.GlobalAnalyzer(input, ticksPerLevel, globalizeAbandonedVas, globalizeThinPrints, globalizeStackedImbalances, showStackedImbalances, imbalanceRatio, stackedImbalanceLevelMinimum, showValueArea, valueAreaPct, maximumAbandonedBarPlot, showThinPrints, maximumThinPrintVolume, stackedThinPrintLevelMinimum, thinPrintHighLowOffset, showVolumeRatios, significantVolumeRatio, showDeltaDirectionDivergences, showBarTandS, textColor, timeAndSalesDepth, showUnfinishedAuctions, minimumBidAsk, showVolumeHeat, volumeMedColor, trailingAverageMinutes, showMaximumMA, maximumMAPeriod, showPriceHighlight, showUnfinishedBlockOrders, minimumUBSize);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.BeckFlows.GlobalAnalyzer GlobalAnalyzer(int ticksPerLevel, bool globalizeAbandonedVas, bool globalizeThinPrints, bool globalizeStackedImbalances, bool showStackedImbalances, int imbalanceRatio, int stackedImbalanceLevelMinimum, bool showValueArea, double valueAreaPct, int maximumAbandonedBarPlot, bool showThinPrints, int maximumThinPrintVolume, int stackedThinPrintLevelMinimum, int thinPrintHighLowOffset, bool showVolumeRatios, double significantVolumeRatio, bool showDeltaDirectionDivergences, bool showBarTandS, Brush textColor, int timeAndSalesDepth, bool showUnfinishedAuctions, int minimumBidAsk, bool showVolumeHeat, Brush volumeMedColor, int trailingAverageMinutes, bool showMaximumMA, int maximumMAPeriod, bool showPriceHighlight, bool showUnfinishedBlockOrders, int minimumUBSize)
+		{
+			return indicator.GlobalAnalyzer(Input, ticksPerLevel, globalizeAbandonedVas, globalizeThinPrints, globalizeStackedImbalances, showStackedImbalances, imbalanceRatio, stackedImbalanceLevelMinimum, showValueArea, valueAreaPct, maximumAbandonedBarPlot, showThinPrints, maximumThinPrintVolume, stackedThinPrintLevelMinimum, thinPrintHighLowOffset, showVolumeRatios, significantVolumeRatio, showDeltaDirectionDivergences, showBarTandS, textColor, timeAndSalesDepth, showUnfinishedAuctions, minimumBidAsk, showVolumeHeat, volumeMedColor, trailingAverageMinutes, showMaximumMA, maximumMAPeriod, showPriceHighlight, showUnfinishedBlockOrders, minimumUBSize);
+		}
+
+		public Indicators.BeckFlows.GlobalAnalyzer GlobalAnalyzer(ISeries<double> input , int ticksPerLevel, bool globalizeAbandonedVas, bool globalizeThinPrints, bool globalizeStackedImbalances, bool showStackedImbalances, int imbalanceRatio, int stackedImbalanceLevelMinimum, bool showValueArea, double valueAreaPct, int maximumAbandonedBarPlot, bool showThinPrints, int maximumThinPrintVolume, int stackedThinPrintLevelMinimum, int thinPrintHighLowOffset, bool showVolumeRatios, double significantVolumeRatio, bool showDeltaDirectionDivergences, bool showBarTandS, Brush textColor, int timeAndSalesDepth, bool showUnfinishedAuctions, int minimumBidAsk, bool showVolumeHeat, Brush volumeMedColor, int trailingAverageMinutes, bool showMaximumMA, int maximumMAPeriod, bool showPriceHighlight, bool showUnfinishedBlockOrders, int minimumUBSize)
+		{
+			return indicator.GlobalAnalyzer(input, ticksPerLevel, globalizeAbandonedVas, globalizeThinPrints, globalizeStackedImbalances, showStackedImbalances, imbalanceRatio, stackedImbalanceLevelMinimum, showValueArea, valueAreaPct, maximumAbandonedBarPlot, showThinPrints, maximumThinPrintVolume, stackedThinPrintLevelMinimum, thinPrintHighLowOffset, showVolumeRatios, significantVolumeRatio, showDeltaDirectionDivergences, showBarTandS, textColor, timeAndSalesDepth, showUnfinishedAuctions, minimumBidAsk, showVolumeHeat, volumeMedColor, trailingAverageMinutes, showMaximumMA, maximumMAPeriod, showPriceHighlight, showUnfinishedBlockOrders, minimumUBSize);
+		}
+	}
+}
+
+#endregion

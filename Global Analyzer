@@ -398,7 +398,7 @@ namespace NinjaTrader.NinjaScript.Indicators.BeckFlows
 					}
 					#endregion
 					
-					#region Object Updater //// MAJOR: AFTER DOUBLE SPLICES, TICK SIZE ADJUSTOR ADDED TO ACCOUNT FOR GAY ASS DRAW OBJECT MECHANICS (TickSize*.5). THIS COULD CAUSE FUTURE ISSUES
+					#region Object Updater //// MAJOR: AFTER DOUBLE SPLICES, TICK SIZE ADJUSTOR ADDED TO ACCOUNT FOR DRAW OBJECT MECHANICS (TickSize*.5). THIS COULD CAUSE FUTURE ISSUES
 					foreach (var Obj in thinPrintTrackerList)
 					{
 	//					Print("Attempting Splice - Thin Prints");

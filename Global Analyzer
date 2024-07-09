@@ -613,7 +613,7 @@ namespace NinjaTrader.NinjaScript.Indicators.BeckFlows
 							if (!thinPrintBools.Contains(false))
 							{
 								//Draw.RegionHighlightY(this, "Thin Spot" + price.ToString(), price + (TickSize * ticksPerLevel * stackedImbalanceLevelMinimum), price, false, "Thin Spot");
-								Draw.Rectangle(this, "Thin Spot" + price.ToString(), 1, price-(TickSize*.5) + (TickSize * ticksPerLevel * stackedThinPrintLevelMinimum), 0, price-(TickSize*.5), Brushes.White);
+								Draw.Rectangle(this, "Thin Spot" + price.ToString(), 1, price-(TickSize*.5) + (TickSize * ticksPerLevel * stackedThinPrintLevelMinimum), 0, price-(TickSize*.5), false, "ThinPrint");
 								thinPrintList.Add("Thin Spot" + price.ToString());
 								thinPrintTrackerList.Add(CurrentBar.ToString() + "," + price.ToString());
 							}

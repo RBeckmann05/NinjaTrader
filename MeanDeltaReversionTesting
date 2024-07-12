@@ -1,0 +1,959 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.Indicators;
+using NinjaTrader.NinjaScript.DrawingTools;
+#endregion
+
+//This namespace holds Strategies in this folder and is required. Do not change it. 
+namespace NinjaTrader.NinjaScript.Strategies.Main
+{
+	public class OBCMeanDeltaReversion : Strategy
+	{	
+		/// IDEA; IF ATR/CLOSE SPENT CERTAIN TIME ABOVE STD UPPER BAND, DONT TRADE NEXT DAY
+		#region Declarations
+		private bool	activeInstance;
+		private Guid	instanceGUID	= Guid.NewGuid();	
+		
+		List<double> sessionCumulativeDeltaValues = new List<double>();
+		List<double> cumulativeDeviationList = new List<double>();
+		double cumulativeDelta = 0;
+		double sessionDeltaAverage = 0;
+		double stdReturnValue = 0;
+		double stdVariance = 0;
+		double stdAbove = 0;
+		double stdBelow = 0;
+		double deltaStdMultiplier = 1; ///
+		
+		bool isPrevUpBar, isPrevDownBar, isPrevDoji = false;
+		double prevBarDelta = 0;
+		bool posDeltaDivergence, negDeltaDivergence = false;
+		
+		bool blockAllEntries, blockAllLongs, blockAllShorts = false;
+		
+		List<double> cumulativeDeltaValuesMinusMean = new List<double>();
+		double cDeltaMinusMean = 0;
+		double sessionVolume = 0;
+		double cumulativeDeviation = 0;
+		
+		bool sessionContainsLargeImbalance = false;
+		List<bool> askImbalanceBools = new List<bool>();
+		List<bool> bidImbalanceBools = new List<bool>();
+		double ask = 0;
+		double bid = 0;
+		bool askImbalanceOnLevel = false;
+		bool bidImbalanceOnLevel = false;
+		double price = 0;
+		#endregion
+		
+		#region Atr Declarations
+		List<double> atrValues = new List<double>();
+		double atr = 0;
+		double atrOverClose = 0;
+		double atrAverage = 0;
+		double atrStdReturnValue, atrStdVariance, atrStdAbove, atrStdBelow = 0;
+		
+		#endregion
+		
+		#region VA Declarations
+		List<string> vaAbandonedTrackerList = new List<string>();
+		List<double> vaAbandonedHighList = new List<double>();
+		List<double> vaAbandonedLowList = new List<double>();
+		List<double> vaSessionAbandonedHighList = new List<double>();
+		List<double> vaSessionAbandonedLowList = new List<double>();
+		List<double> pricesforvaluearea = new List<double>();
+		bool vaTouched = false;
+		double vaLow = 0;
+		double vaHigh = 0;
+		int rotationFactor = 0;
+		double vaMaximum = 0;
+		double vaMaximumPrice = 0;
+		double cumulativeBarVolume = 0;
+		double totalBarVolume = 0;
+		double valueAreaPct = .68;
+		double volume = 0;
+		int vaIndexValue = 0;
+		#endregion
+		
+		int entryIndex = 0;
+		bool disableStrategy = false;
+		bool checkDisableStrategy = false;
+		
+		double netProfit = 0;
+		double cumulativeNetProfit = 0;
+		List<double> netProfitList = new List<double>();
+		double currentDayOpen = 0;
+		double currentDayHigh = 0;
+		double currentDayLow = 0;
+		double sessionHLDivergenceCount = 0;
+		bool highDivergenceStreaking = false;
+		bool lowDivergenceStreaking = false;
+		double entryPrice = 0;
+		int saveOriginalQTY = 0;
+		int QTY = 0;
+		double vwapUpper = 0;
+		double vwapLower = 0;
+		bool sessionDisableLong = false;
+		bool sessionDisableShort = false;
+		
+		int numSessionBars = 0;
+		
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{
+				Description									= @"Enter the description for your new custom Strategy here.";
+				Name										= "OBCMeanDeltaReversion";
+				Calculate									= Calculate.OnBarClose;
+				EntriesPerDirection							= 1;
+				EntryHandling								= EntryHandling.AllEntries;
+				IsExitOnSessionCloseStrategy				= true;
+				ExitOnSessionCloseSeconds					= 30;
+				IsFillLimitOnTouch							= false;
+				MaximumBarsLookBack							= MaximumBarsLookBack.TwoHundredFiftySix;
+				OrderFillResolution							= OrderFillResolution.Standard;
+				Slippage									= 0;
+				StartBehavior								= StartBehavior.WaitUntilFlat;
+				TimeInForce									= TimeInForce.Gtc;
+				TraceOrders									= false;
+				RealtimeErrorHandling						= RealtimeErrorHandling.StopCancelClose;
+				StopTargetHandling							= StopTargetHandling.PerEntryExecution;
+				BarsRequiredToTrade							= 20;
+				// Disable this property for performance gains in Strategy Analyzer optimizations
+				// See the Help Guide for additional information
+				IsInstantiatedOnEachOptimizationIteration	= true;
+				IncludeTradeHistoryInBacktest				= true;
+				TraceOrders									= true;
+				
+				ticksPerLevel								= 4;
+				entryQuantity								= 1;
+				showAbandonedVAs							= false;
+				showHLDivergenceStreak						= false;
+				sessionVolumePct							= 0; // 2
+				meanLookback								= 0; // 220
+				imbalanceRatio								= 4;
+				stackedImbalanceLevelMinimum				= 0; // 5
+				valueAreaLookback							= 50;
+				highLowDivergenceMaximum					= 0; /// 4
+				maximumPointStop							= 0; // 90
+				useMicroEntries								= true;
+				cumulativeDeviationMinimum					= 0; // 600
+				atrSessionReset								= true;
+				atrPeriodMA									= 0; /// 6000
+				atrStdMultiplier							= .68; // 1
+				flipOnUABlock								= true;
+				
+				StartTime						= DateTime.Parse("8:30", System.Globalization.CultureInfo.InvariantCulture);
+				EndTime							= DateTime.Parse("16:00", System.Globalization.CultureInfo.InvariantCulture);
+			}
+			else if (State == State.Configure)
+			{
+				AddDataSeries(Data.BarsPeriodType.Tick, 1);
+				AddDataSeries("MNQ 03-24", BarsPeriodType.Tick, 1);
+			}
+			
+			#region Walk Forward Fix: State.DataLoaded && State.Terminated
+			else if (State == State.DataLoaded)
+			{
+				activeInstance = true;
+			}
+			
+			else if (State == State.Terminated)
+			{
+				if (!activeInstance)
+					return;
+
+				activeInstance	= false;
+				
+				PrintTo = PrintTo.OutputTab2;
+				Print("-----------------------------");
+				Print(string.Format("{0} |   NetProfit: {1}", instanceGUID, SystemPerformance.AllTrades.TradesPerformance.NetProfit));
+				PrintTo = PrintTo.OutputTab1;
+			}
+			#endregion
+		}
+
+		protected override void OnBarUpdate()
+		{
+			if (CurrentBars[0] == 1)
+				saveOriginalQTY = entryQuantity;
+			
+			if (CurrentBar < 2)
+				return;
+			
+			#region Volumetric Setup
+			if (Bars == null)
+          		return;
+	        NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType barsType = Bars.BarsSeries.BarsType as    
+	        NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType;
+	        if (barsType == null)
+	          	return;
+			#endregion
+			
+			#region Clear Previous Data and plot results
+			if (Bars.IsFirstBarOfSession && BarsInProgress == 0)
+			{
+				//Print("New Session");
+				sessionCumulativeDeltaValues.Clear();
+				cumulativeDeltaValuesMinusMean.Clear();
+				sessionVolume = 0;
+				sessionHLDivergenceCount = 0;
+				sessionContainsLargeImbalance = false;
+				vaAbandonedTrackerList.Clear();
+				vaAbandonedHighList.Clear();
+				vaAbandonedLowList.Clear();
+				vaSessionAbandonedHighList.Clear();
+				vaSessionAbandonedLowList.Clear();
+				
+				netProfit = SystemPerformance.AllTrades.TradesPerformance.NetProfit;
+				cumulativeNetProfit = netProfit;
+				netProfitList.Add(netProfit);
+				if (netProfitList.Count() > 2)
+				{
+					cumulativeNetProfit = cumulativeNetProfit - netProfitList[netProfitList.Count() - 2];
+					///Print("Session Profit: " + cumulativeNetProfit.ToString());
+					Draw.Text(this, CurrentBar.ToString(), Math.Round(cumulativeNetProfit).ToString(), numSessionBars, currentDayOpen, true, "CNP");
+					if (cumulativeNetProfit < 0
+						&& cumulativeNetProfit > -1000)
+					{
+						Draw.Rectangle(this, "rec" + CurrentBar.ToString(), 0, 100000, numSessionBars, 0, true, "SmallLoss");
+					}
+					if (cumulativeNetProfit < -1000 
+						&& cumulativeNetProfit > -3000)
+					{
+						Draw.Rectangle(this, "rec" + CurrentBar.ToString(), 0, 100000, numSessionBars, 0, true, "MediumLoss");
+					}
+					if (cumulativeNetProfit < -3000)
+					{
+						Draw.Rectangle(this, "rec" + CurrentBar.ToString(), 0, 100000, numSessionBars, 0, true, "LargeLoss");
+					}
+					
+					if (cumulativeNetProfit > 0
+						&& cumulativeNetProfit < 1000)
+					{
+						Draw.Rectangle(this, "rec" + CurrentBar.ToString(), 0, 100000, numSessionBars, 0, true, "SmallProfit");
+					}
+					if (cumulativeNetProfit > 1000 
+						&& cumulativeNetProfit < 3000)
+					{
+						Draw.Rectangle(this, "rec" + CurrentBar.ToString(), 0, 100000, numSessionBars, 0, true, "MediumProfit");
+					}
+					if (cumulativeNetProfit > 3000)
+					{
+						Draw.Rectangle(this, "rec" + CurrentBar.ToString(), 0, 100000, numSessionBars, 0, true, "LargeProfit");
+					}
+				}
+				numSessionBars = 0;
+			}
+			
+			if (BarsInProgress == 0)
+			{
+				numSessionBars = numSessionBars + 1;
+				blockAllEntries = false;
+				blockAllLongs = false;
+				blockAllShorts = false;
+			}
+			#endregion
+			
+			if (Bars.IsFirstBarOfSession && BarsInProgress == 0)
+			{
+				sessionDisableLong = false;
+				sessionDisableShort = false;
+				disableStrategy = false;
+				if ((Math.Abs(cumulativeDeviation) > cumulativeDeviationMinimum)
+					&& (cumulativeDeviationMinimum != 0)
+					&& (Close[1] > vwapUpper || Close[1] < vwapLower))
+				{
+					//Print(saveOriginalQTY);
+					if (cumulativeDeviationMinimum != 0)
+					{
+						QTY = saveOriginalQTY * 2;
+						
+						Print("Entry Quantity Doubled");
+						Print("Cumulative Delta: " + cumulativeDelta.ToString());
+						Print(string.Format("STD Above: {0} \nSTD Below: {1}", stdAbove.ToString(), stdBelow.ToString()));
+						if (Close[1] > vwapUpper)
+							sessionDisableLong = true;
+						if (Close[1] < vwapLower)
+							sessionDisableShort = true;
+					}
+					
+				}
+				else
+					QTY = entryQuantity;
+				checkDisableStrategy = true;
+				
+			}
+			
+			/// ADD IF PREVIOUS DAY CUMULATIVE DELTA CLOSED OUTSIDE STD BAND, DOUBLE QUANTITY NEXT DAY
+			
+			if (BarsInProgress == 0)
+			{
+				//Print("New Bar");
+				currentDayOpen = CurrentDayOHL().CurrentOpen[0];
+				currentDayHigh = CurrentDayOHL().CurrentHigh[0];
+				currentDayLow = CurrentDayOHL().CurrentLow[0];
+				vwapUpper = OrderFlowVWAP(VWAPResolution.Tick, Bars.TradingHours, VWAPStandardDeviations.Three, 1, 2, 3).StdDev1Upper[2];
+				vwapLower = OrderFlowVWAP(VWAPResolution.Tick, Bars.TradingHours, VWAPStandardDeviations.Three, 1, 2, 3).StdDev1Lower[2];
+				
+				#region Find Delta Standard Deviation
+				cumulativeDelta = OrderFlowCumulativeDelta(CumulativeDeltaType.BidAsk, CumulativeDeltaPeriod.Session, 0).DeltaClose[0];
+				sessionVolume = sessionVolume + VOL()[0];
+				sessionCumulativeDeltaValues.Add(cumulativeDelta);
+				sessionDeltaAverage = sessionCumulativeDeltaValues.Sum() / sessionCumulativeDeltaValues.Count();
+				stdReturnValue = sessionCumulativeDeltaValues.Sum(v => Math.Pow(v - sessionDeltaAverage, 2)) / sessionCumulativeDeltaValues.Count();
+				stdVariance = Math.Sqrt(stdReturnValue);
+				stdAbove = sessionDeltaAverage + (stdVariance * deltaStdMultiplier);
+				stdBelow = sessionDeltaAverage - (stdVariance * deltaStdMultiplier);
+				cDeltaMinusMean = cumulativeDelta - sessionDeltaAverage;
+				cumulativeDeltaValuesMinusMean.Add(cDeltaMinusMean);
+				cumulativeDeviation = cumulativeDeltaValuesMinusMean.Sum() / stdVariance;
+				
+				if ((cumulativeDelta > stdAbove)
+					|| (cumulativeDelta < stdBelow))
+				{
+					cumulativeDeviationList.Add(cumulativeDelta);
+					cumulativeDeviation = cumulativeDeviationList.Sum() / sessionVolume;
+				}
+				#endregion
+				
+				#region Atr Information
+				atr = ATR(10)[0];
+				atrOverClose = atr*10000 / Close[0];
+				atrValues.Add(atrOverClose);
+				if ((atrValues.Count() > atrPeriodMA)
+					&& (atrPeriodMA != 0)
+					&& (atrValues.Count() > 0))
+					atrValues.RemoveAt(0);
+				atrAverage = atrValues.Sum() / atrValues.Count();
+				
+				atrStdReturnValue = atrValues.Sum(v => Math.Pow(v - atrAverage, 2)) / atrValues.Count();
+				atrStdVariance = Math.Sqrt(atrStdReturnValue);
+				atrStdAbove = atrAverage + (atrStdVariance * atrStdMultiplier);
+				atrStdBelow = atrAverage - (atrStdVariance * atrStdMultiplier);
+
+				if (atrSessionReset && Bars.IsFirstBarOfSession)
+				{
+					atrValues.Clear();
+				}
+				#endregion
+				
+				#region Previous Bar Direction
+				if (Open[0] < Close[0])
+				{
+					isPrevUpBar = true;
+					isPrevDownBar = false;
+					isPrevDoji = false;
+				}
+				else if (Open[0] > Close[0])
+				{
+					isPrevUpBar = false;
+					isPrevDownBar = true;
+					isPrevDoji = false;
+				}
+				else if (Open[0] == Close[0])
+				{
+					isPrevUpBar = false;
+					isPrevDownBar = false;
+					isPrevDoji = true;
+				}
+				#endregion
+				
+				Print("ABV");
+				#region Abandoned Value Area
+				price = Low[0]; // Set price to low for looping price levels
+				vaTouched = false;
+				while (price <= High[0])
+				{
+					if (price >= vaLow
+						&& price <= vaHigh
+						&& CurrentBar > 2) // To ensure a value area has loaded before calling
+					{
+						vaTouched = true;
+					}
+					price = price + TickSize;
+				}
+				
+				if (!vaTouched 
+					&& CurrentBar > 2)
+				{
+					vaAbandonedTrackerList.Add(CurrentBar.ToString());
+					Print("New VABHLS: " + vaHigh.ToString() + ", " + vaLow.ToString());
+					vaAbandonedHighList.Add(vaHigh);
+					vaAbandonedLowList.Add(vaLow);
+					vaSessionAbandonedHighList.Add(vaHigh);
+					vaSessionAbandonedLowList.Add(vaLow);
+				}
+				
+				if (showAbandonedVAs && valueAreaLookback != 0)
+				{
+					if (vaAbandonedTrackerList.Count() < valueAreaLookback)
+					{
+						Draw.TextFixed(this, "NinjaScriptInfo2",
+						"ABV Count: " + vaAbandonedTrackerList.Count().ToString(),
+						TextPosition.TopLeft,
+						ChartControl.Properties.ChartText,
+						ChartControl.Properties.LabelFont,
+						Brushes.Gray, Brushes.Black, 100);
+					}
+					else if (vaAbandonedTrackerList.Count() >= valueAreaLookback)
+					{
+						Draw.TextFixed(this, "NinjaScriptInfo2",
+						"TRADING BLOCKED",
+						TextPosition.TopLeft,
+						ChartControl.Properties.ChartText,
+						ChartControl.Properties.LabelFont,
+						Brushes.Black, Brushes.Red, 100);
+					}
+					
+				}
+				#endregion // MUST BE IN PROGRAM BEFORE VALUE AREA CALCULATION
+				
+				Print("VA");
+				#region Value Area
+				if (valueAreaLookback != 0)
+				{
+					rotationFactor = 1;
+					vaMaximum = barsType.Volumes[CurrentBar].GetMaximumVolume(null, out vaMaximumPrice);
+					price = vaMaximumPrice; // Set price to maximum price for helix looping price levels
+					cumulativeBarVolume = 0;
+					cumulativeBarVolume = cumulativeBarVolume + vaMaximum;
+					totalBarVolume = VOL()[0];
+					pricesforvaluearea.Clear();
+					while (cumulativeBarVolume <= (totalBarVolume * valueAreaPct))
+					{
+						if (cumulativeBarVolume <= (totalBarVolume * valueAreaPct))
+						{
+							price = price + (TickSize * rotationFactor * ticksPerLevel);
+							if (price <= High[0])
+							{
+								volume = barsType.Volumes[CurrentBar].GetTotalVolumeForPrice(price);
+								cumulativeBarVolume = cumulativeBarVolume + volume;
+								pricesforvaluearea.Add(price);
+							}
+							rotationFactor = rotationFactor + 1;
+						}
+						if (cumulativeBarVolume <= (totalBarVolume * valueAreaPct))
+						{
+							price = price - (TickSize * rotationFactor * ticksPerLevel);
+							if (price >= Low[0])
+							{
+								volume = barsType.Volumes[CurrentBar].GetTotalVolumeForPrice(price);
+								cumulativeBarVolume = cumulativeBarVolume + volume;
+								pricesforvaluearea.Add(price);
+							}
+							rotationFactor = rotationFactor + 1;
+						}
+						if (cumulativeBarVolume <= 0 || totalBarVolume <= 0 || price < 0)
+						{
+							break;
+						}
+					}
+					pricesforvaluearea.Sort();
+					if (pricesforvaluearea.Count() > 0)
+					{
+						vaLow = pricesforvaluearea[0];
+						vaHigh = pricesforvaluearea[pricesforvaluearea.Count - 1];
+					}
+				}
+				#endregion
+						
+				#region Delta Divergences
+				prevBarDelta = barsType.Volumes[CurrentBar].BarDelta;
+				posDeltaDivergence = false;
+				negDeltaDivergence = false;
+				if (isPrevDownBar && prevBarDelta > 0)
+					posDeltaDivergence = true;
+				if (isPrevUpBar && prevBarDelta < 0)
+					negDeltaDivergence = true;
+				#endregion
+				
+				//Print("Data Found");
+				
+				Print("Running Checks");
+				if (atrPeriodMA != 0)
+				{
+					#region ATR Check
+					if ((atrOverClose) < atrStdBelow)
+					{
+						blockAllLongs = true;
+						blockAllShorts = true;
+						if (Position.MarketPosition != MarketPosition.Flat)
+						{
+							if (Close[0] < entryPrice)
+								ExitLong();
+							if (Close[0] > entryPrice)
+								ExitShort();
+						}
+					}
+					#endregion
+				}
+				
+				if (stackedImbalanceLevelMinimum != 0)
+				{
+					#region Stacked Imbalances
+					if (stackedImbalanceLevelMinimum != 0)
+					{
+						price = Low[1]; // Set price to low of bar for looping prices
+						while (price <= High[1])
+						{
+							askImbalanceBools.Clear();
+							bidImbalanceBools.Clear();
+							foreach (int Level in Enumerable.Range(0, stackedImbalanceLevelMinimum))
+							{
+								ask = barsType.Volumes[CurrentBar].GetAskVolumeForPrice(price + (Level * TickSize * ticksPerLevel));
+								bid = barsType.Volumes[CurrentBar].GetBidVolumeForPrice(price + (Level * TickSize * ticksPerLevel));
+								
+								if (ask/bid >= imbalanceRatio)
+								{
+									askImbalanceOnLevel = true;
+									bidImbalanceOnLevel = false;
+									
+									askImbalanceBools.Add(askImbalanceOnLevel);
+									bidImbalanceBools.Add(bidImbalanceOnLevel);
+								}
+								else if (bid/ask >= imbalanceRatio)
+								{
+									askImbalanceOnLevel = false;
+									bidImbalanceOnLevel = true;
+									
+									askImbalanceBools.Add(askImbalanceOnLevel);
+									bidImbalanceBools.Add(bidImbalanceOnLevel);
+								}
+								else
+								{
+									askImbalanceOnLevel = false;
+									bidImbalanceOnLevel = false;
+									
+									askImbalanceBools.Add(askImbalanceOnLevel);
+									bidImbalanceBools.Add(bidImbalanceOnLevel);
+								}
+							}
+							
+							if (!askImbalanceBools.Contains(false))
+							{
+								sessionContainsLargeImbalance = true;
+							}
+							
+							else if (!bidImbalanceBools.Contains(false))
+							{
+								sessionContainsLargeImbalance = true;
+							}
+							
+							price = price + (TickSize * ticksPerLevel);
+						}
+					}
+					#endregion
+				}
+				
+				#region Abandoned VA Check
+				if (vaAbandonedTrackerList.Count() == valueAreaLookback
+					&& valueAreaLookback != 0)
+				{
+					if ((Position.MarketPosition == MarketPosition.Long)
+						&& (!sessionDisableShort))
+					{
+						ExitLong();
+						if (flipOnUABlock)
+							EnterShort();
+					}
+					else if ((Position.MarketPosition == MarketPosition.Short)
+						&& (!sessionDisableLong))
+					{
+						ExitShort();
+						if (flipOnUABlock)
+							EnterLong();
+					}
+					blockAllEntries = true;
+					sessionDisableLong = true;
+					sessionDisableShort = true;
+				}
+				#endregion
+				
+				if (stackedImbalanceLevelMinimum != 0)
+				{
+					#region Large Imbalance Check
+					if (sessionContainsLargeImbalance
+						&& stackedImbalanceLevelMinimum != 0)
+					{
+						blockAllEntries = true;
+						if (Position.MarketPosition != MarketPosition.Flat)
+						{
+							ExitLong();
+							ExitShort();
+						}
+					}
+					#endregion
+				}
+				
+				if (sessionVolumePct != 0)
+				{
+					#region Trend Check
+					sessionVolume = sessionVolume + VOL()[0];					
+					if (Math.Abs(cumulativeDeviation) > sessionVolume * sessionVolumePct
+						&& (sessionVolumePct != 0))
+					{
+						if (cumulativeDeviation > 0)
+						{
+							blockAllEntries = true; 
+							if (Position.MarketPosition == MarketPosition.Short)
+								ExitShort();
+						}
+						
+						if (cumulativeDeviation < 0)
+						{
+							blockAllEntries = true;
+							if (Position.MarketPosition == MarketPosition.Long)
+								ExitLong();
+						}
+					}
+					#endregion
+				}
+				
+				if (highLowDivergenceMaximum != 0)
+				{
+					#region Divergence Trend Check
+					//if ((Times[0][0].TimeOfDay > new TimeSpan(5, 30, 0))
+					//&& (Times[0][0].TimeOfDay < new TimeSpan(15, 0, 0)))
+					if (true)
+					{
+						if (High[0] >= currentDayHigh)
+						{
+							if (lowDivergenceStreaking)
+								sessionHLDivergenceCount = 0;
+							if (Close[0] < Open[0]
+								&& prevBarDelta < 0)
+							{
+								sessionHLDivergenceCount = sessionHLDivergenceCount + 1;
+								highDivergenceStreaking = true;
+								lowDivergenceStreaking = false;
+							}
+						}
+						
+						if (Low[0] <= currentDayLow)
+						{
+							if (highDivergenceStreaking)
+								sessionHLDivergenceCount = 0;
+							if (Close[0] > Open[0]
+								&& prevBarDelta > 0)
+							{
+								sessionHLDivergenceCount = sessionHLDivergenceCount + 1;
+								highDivergenceStreaking = false;
+								lowDivergenceStreaking = true;
+							}
+						}
+					}
+					
+					if ((sessionHLDivergenceCount >= highLowDivergenceMaximum)
+						&& (highLowDivergenceMaximum != 0))
+					{
+						if (lowDivergenceStreaking)
+						{
+							blockAllLongs = true;
+							blockAllShorts = true;
+							if (Position.MarketPosition == MarketPosition.Long)
+								ExitLong();
+						}
+						if (highDivergenceStreaking)
+						{
+							blockAllLongs = true;
+							blockAllShorts = true;
+							if (Position.MarketPosition == MarketPosition.Short)
+								ExitShort();
+						}
+					}
+					
+					if (showHLDivergenceStreak && highLowDivergenceMaximum != 0)
+					{
+						/*
+						Draw.TextFixed(this, "NinjaScriptInfo1",
+						"HL Div Count: " + sessionHLDivergenceCount.ToString(),
+						TextPosition.TopRight,
+						ChartControl.Properties.ChartText,
+						ChartControl.Properties.LabelFont,
+						Brushes.Gray, Brushes.Black, 100);
+						*/
+					}
+					#endregion
+				}
+				
+				#region Entry Indexing
+				if (useMicroEntries)
+					entryIndex = 2;
+				else
+					entryIndex = 1;
+				#endregion
+				
+				//Print("Searching Entries");
+				
+				if (sessionDisableLong)
+					blockAllLongs = true;
+				if (sessionDisableShort)
+					blockAllShorts = true;
+				
+				if (!disableStrategy)
+				{
+					Print("Running Executions");
+					#region Order Execution	
+					if (!blockAllEntries)// && vaAbandonedHighList.Count() > 0 && vaAbandonedLowList.Count() > 0)
+					{
+						//Print(QTY);
+						if (Position.MarketPosition != MarketPosition.Long)
+						{
+							if (cumulativeDelta < stdBelow
+								&& (negDeltaDivergence || posDeltaDivergence)
+								&& !blockAllLongs)
+								//&& ((Close[0] > vaAbandonedLowList.Min()) && (Close[0] > vaAbandonedLowList.Last())))
+							{
+								EnterLongLimit(entryIndex, true, QTY, Close[0], "Enter Limit Long");
+								entryPrice = Close[0];
+							}
+						}
+						
+						if (Position.MarketPosition != MarketPosition.Short)
+						{
+							if (cumulativeDelta > stdAbove
+								&& (negDeltaDivergence || posDeltaDivergence)
+								&& !blockAllShorts)
+								//&& ((Close[0] < vaAbandonedHighList.Max()) && (Close[0] < vaAbandonedHighList.Last())))
+							{
+								EnterShortLimit(entryIndex, true, QTY, Close[0], "Enter Limit Short");
+								entryPrice = Close[0];
+							}
+						}
+					}
+					#endregion
+					
+					Print("Running Management");
+					#region Order Management
+					//Print("Managing Order");
+					//Print(QTY);
+					if (Position.MarketPosition == MarketPosition.Long
+						&& cumulativeDelta > sessionDeltaAverage)
+					{
+						ExitLongLimit(entryIndex, true, QTY, Close[0], "Exit Limit Long", "Enter Limit Long");
+					}
+					
+					if (Position.MarketPosition == MarketPosition.Short
+						&& cumulativeDelta < sessionDeltaAverage)
+					{
+						ExitShortLimit(entryIndex, true, QTY, Close[0], "Exit Limit Short", "Enter Limit Short");
+					}
+					
+					if (maximumPointStop != 0)
+					{
+						if ((Position.MarketPosition == MarketPosition.Long)
+							&& (entryPrice - Close[0] > maximumPointStop))
+						{
+							ExitLong();
+						}
+						
+						if ((Position.MarketPosition == MarketPosition.Short)
+							&& (Close[0] - entryPrice > maximumPointStop))
+						{
+							ExitShort();
+						}
+					}
+					#endregion
+					
+					Print("Running VA Management");
+					#region VA Order Management
+					/*
+					if (vaAbandonedHighList.Count() > 0)
+					{
+						Print(vaAbandonedLowList[vaAbandonedLowList.Count()-1].ToString());
+						if ((Position.MarketPosition == MarketPosition.Long)
+							&& (Close[0] < vaSessionAbandonedLowList.Last()))
+							//&& (MAX(High, 3)[0] > vaAbandonedLowList.Last()))
+							ExitLong();
+						if ((Position.MarketPosition == MarketPosition.Short)
+							&& (Close[0] > vaSessionAbandonedHighList.Last()))
+							//&& (MIN(Low, 3)[0] < vaAbandonedHighList.Last()))
+							ExitShort();
+					}
+					*/
+					#endregion
+					//Print("End Management");
+				}
+			}
+			
+			Print("Clearing Data");
+			if (Bars.IsFirstBarOfSession && BarsInProgress == 0)
+			{
+				if (sessionCumulativeDeltaValues.Count() > 0)
+					sessionCumulativeDeltaValues.RemoveAt(0);
+				if (cumulativeDeltaValuesMinusMean.Count() > 0)
+					cumulativeDeltaValuesMinusMean.RemoveAt(0);
+			}
+			//Print("Dont 1");
+			
+			Print("Running MLB");
+			if (BarsInProgress == 0
+				&& sessionCumulativeDeltaValues.Count() > meanLookback
+				&& meanLookback != 0)
+			{
+				sessionCumulativeDeltaValues.RemoveAt(0);
+				cumulativeDeltaValuesMinusMean.RemoveAt(0);
+			}
+			
+			Print("Removal Process");
+			if (BarsInProgress == 0)
+			{
+				price = Low[0]; // Set price to low of bar for looping prices
+				while (price <= High[0])
+				{
+					foreach(var Obj in vaAbandonedHighList.ToList())
+					{
+						vaIndexValue = vaAbandonedHighList.IndexOf(Obj);
+						if ((price <= vaAbandonedHighList[vaIndexValue]) && (price >= vaAbandonedLowList[vaIndexValue]))
+						{
+							vaAbandonedHighList.RemoveAt(vaIndexValue);
+							vaAbandonedLowList.RemoveAt(vaIndexValue);
+						}
+					}
+					
+					price = price + TickSize;
+				}
+			}
+			//Print("End OBU");
+		}
+		
+		protected override void OnOrderTrace(DateTime timestamp, string message)
+		{
+			#region Order Tracing
+		    if (ToTime(timestamp) > 0)
+		        Print(message);
+			#endregion
+		}
+		
+		#region Properties
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="ticksPerLevel", Order=1, GroupName="General Information")]
+		public int ticksPerLevel
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="entryQuantity", Order=2, GroupName="General Information")]
+		public int entryQuantity
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="useMicroEntries", Order=3, GroupName="General Information")]
+		public bool useMicroEntries
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="showAbandonedVAs", Order=4, GroupName="General Information")]
+		public bool showAbandonedVAs
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="showHLDivergenceStreak", Order=5, GroupName="General Information")]
+		public bool showHLDivergenceStreak
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="sessionVolumePct", Order=2, GroupName="Set Defaults")]
+		public double sessionVolumePct
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="meanLookback", Order=3, GroupName="Set Defaults")]
+		public double meanLookback
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="imbalanceRatio", Order=4, GroupName="Set Defaults")]
+		public double imbalanceRatio
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="stackedImbalanceLevelMinimum", Order=5, GroupName="Set Defaults")]
+		public int stackedImbalanceLevelMinimum
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="valueAreaLookback", Order=6, GroupName="Set Defaults")]
+		public int valueAreaLookback
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="highLowDivergenceMaximum", Order=7, GroupName="Set Defaults")]
+		public int highLowDivergenceMaximum
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="maximumPointStop", Order=8, GroupName="Set Defaults")]
+		public double maximumPointStop
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="cumulativeDeviationMinimum", Order=9, GroupName="Set Defaults")]
+		public double cumulativeDeviationMinimum
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="atrPeriodMA", Order=10, GroupName="Set Defaults")]
+		public int atrPeriodMA
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="atrSessionReset", Order=11, GroupName="Set Defaults")]
+		public bool atrSessionReset
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(-10, int.MaxValue)]
+		[Display(Name="atrStdMultiplier", Order=12, GroupName="Set Defaults")]
+		public double atrStdMultiplier
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="flipOnUABlock", Order=13, GroupName="Set Defaults")]
+		public bool flipOnUABlock
+		{ get; set; }
+		
+		#region Properties
+		[NinjaScriptProperty]
+		[PropertyEditor("NinjaTrader.Gui.Tools.TimeEditorKey")]
+		[Display(Name="StartTime", Order=1, GroupName="Times")]
+		public DateTime StartTime
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[PropertyEditor("NinjaTrader.Gui.Tools.TimeEditorKey")]
+		[Display(Name="EndTime", Order=2, GroupName="Times")]
+		public DateTime EndTime
+		{ get; set; }
+		#endregion
+	}
+}
+#endregion

@@ -1,0 +1,294 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.Indicators;
+using NinjaTrader.NinjaScript.DrawingTools;
+#endregion
+
+//This namespace holds Strategies in this folder and is required. Do not change it. 
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public class ABVTrader : Strategy
+	{
+		double valueAreaPct = .68;
+		double ticksPerLevel = 1;
+		
+		#region Price and Indexing
+		double price = 0;
+		int indexer = 0;
+		string indexerStringValue = "";
+		#endregion
+		
+		#region Value Area
+		int rotationFactor = 0;
+		double vaMaximum = 0;
+		double vaMaximumPrice = 0;
+		double cumulativeBarVolume = 0;
+		double totalBarVolume = 0;
+		double volume = 0;
+		List<double> pricesforvaluearea = new List<double>();
+		List<string> vaAbandonedTrackerList = new List<string>();
+		double vaLow = 0;
+		double vaHigh = 0;
+		bool vaTouched = false;
+		#endregion
+		
+		double recentVaHigh, recentVaLow = 0;
+		double tickLoss = 0;
+		int entryIndex = 1;
+		bool enteredOnCurrentBar = false;
+		
+		private Order myEntryOrder = null;
+		
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{
+				Description									= @"Trade creation of abandoned value areas at swing high/low";
+				Name										= "ABVTrader";
+				Calculate									= Calculate.OnBarClose;
+				EntriesPerDirection							= 1;
+				EntryHandling								= EntryHandling.AllEntries;
+				IsExitOnSessionCloseStrategy				= true;
+				ExitOnSessionCloseSeconds					= 30;
+				IsFillLimitOnTouch							= false;
+				MaximumBarsLookBack							= MaximumBarsLookBack.TwoHundredFiftySix;
+				OrderFillResolution							= OrderFillResolution.Standard;
+				Slippage									= 0;
+				StartBehavior								= StartBehavior.WaitUntilFlat;
+				TimeInForce									= TimeInForce.Gtc;
+				TraceOrders									= false;
+				RealtimeErrorHandling						= RealtimeErrorHandling.IgnoreAllErrors;
+				StopTargetHandling							= StopTargetHandling.PerEntryExecution;
+				BarsRequiredToTrade							= 20;
+				// Disable this property for performance gains in Strategy Analyzer optimizations
+				// See the Help Guide for additional information
+				IsInstantiatedOnEachOptimizationIteration	= true;
+				
+				entryTickTolerance							= 3;
+				targetHighLowLookback						= 20;
+			}
+			else if (State == State.Configure)
+			{
+				AddDataSeries(null, Data.BarsPeriodType.Tick, 1);
+			}
+		}
+
+		protected override void OnBarUpdate()
+		{
+			#region Volumetric Setup
+	        NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType barsType = Bars.BarsSeries.BarsType as    
+	        NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType;
+			
+			if (CurrentBar < 2)
+				return;
+			#endregion
+			
+			#region Check Data Loaded
+			entryIndex = 0;
+			enteredOnCurrentBar = false;
+			
+			if (CurrentBars[0] < targetHighLowLookback)
+				return;
+			if (CurrentBars[1] < 4000)
+				return;
+			#endregion
+			
+			if (BarsInProgress == 0)
+			{
+				#region Abandoned Value Area
+				price = Low[0]; 
+				vaTouched = false;
+				while (price <= High[0])
+				{
+					if (price >= vaLow
+						&& price <= vaHigh
+						&& CurrentBar > 2)
+					{
+						vaTouched = true;
+					}
+					price = price + TickSize;
+				}
+				
+				if (!vaTouched 
+					&& CurrentBar > 2)
+				{
+					vaAbandonedTrackerList.Add(vaLow.ToString() + "," + vaHigh.ToString());
+				}
+				
+				if (vaAbandonedTrackerList.Count() > 1)
+					vaAbandonedTrackerList.RemoveAt(0);	
+				#endregion // MUST BE IN PROGRAM BEFORE VALUE AREA CALCULATION
+			}
+
+			if (BarsInProgress == 0)
+			{
+				#region Value Area
+				rotationFactor = 1;
+				vaMaximum = barsType.Volumes[CurrentBar].GetMaximumVolume(null, out vaMaximumPrice);
+				price = vaMaximumPrice; 
+				cumulativeBarVolume = 0;
+				cumulativeBarVolume = cumulativeBarVolume + vaMaximum;
+				totalBarVolume = VOL()[0];
+				pricesforvaluearea.Clear();
+				while (cumulativeBarVolume <= (totalBarVolume * valueAreaPct))
+				{
+					if (cumulativeBarVolume <= (totalBarVolume * valueAreaPct))
+					{
+						price = price + (TickSize * rotationFactor * ticksPerLevel);
+						if (price <= High[0])
+						{
+							volume = barsType.Volumes[CurrentBar].GetTotalVolumeForPrice(price);
+							cumulativeBarVolume = cumulativeBarVolume + volume;
+							pricesforvaluearea.Add(price);
+						}
+						rotationFactor = rotationFactor + 1;
+					}
+					if (cumulativeBarVolume <= (totalBarVolume * valueAreaPct))
+					{
+						price = price - (TickSize * rotationFactor * ticksPerLevel);
+						if (price >= Low[0])
+						{
+							volume = barsType.Volumes[CurrentBar].GetTotalVolumeForPrice(price);
+							cumulativeBarVolume = cumulativeBarVolume + volume;
+							pricesforvaluearea.Add(price);
+						}
+						rotationFactor = rotationFactor + 1;
+					}
+					if (cumulativeBarVolume <= 0 || totalBarVolume <= 0 || price < 0)
+					{
+						break;
+					}
+				}
+				pricesforvaluearea.Sort();
+				if (pricesforvaluearea.Count() > 0)
+				{
+					vaLow = pricesforvaluearea[0];
+					vaHigh = pricesforvaluearea[pricesforvaluearea.Count - 1];
+				}
+				#endregion
+			}
+			
+			if (BarsInProgress == 0
+				&& vaAbandonedTrackerList.Count() == 1)
+			{	
+				#region Collect Entry Data
+				string[] splicedValues = vaAbandonedTrackerList[vaAbandonedTrackerList.Count()-1].Split(',');
+				recentVaLow = double.Parse(splicedValues[0].Trim());
+				recentVaHigh = double.Parse(splicedValues[1].Trim());
+				tickLoss = (recentVaHigh - recentVaLow + TickSize*(entryTickTolerance+1))*4;
+				
+				int highestBarsAgo = HighestBar(High, targetHighLowLookback);
+				double longTargetPrice = High[highestBarsAgo];
+				int lowestBarsAgo = LowestBar(Low, targetHighLowLookback);
+				double shortTargetPrice = Low[lowestBarsAgo];
+				
+				double longTickProfit = (longTargetPrice - recentVaHigh)*4 - entryTickTolerance;
+				double shortTickProfit = (recentVaLow - shortTargetPrice)*4 - entryTickTolerance;
+				if (shortTickProfit < 8
+					|| longTickProfit < 8)
+					return;
+				#endregion
+				
+				#region Order Entry
+				if (Close[0] < recentVaLow
+					&& Positions[entryIndex].MarketPosition == MarketPosition.Flat)
+				{
+					SetStopLoss(CalculationMode.Ticks, tickLoss);
+					SetProfitTarget(CalculationMode.Ticks, shortTickProfit);
+					EnterShortLimit(entryIndex, false, 1, recentVaLow-TickSize*entryTickTolerance, "Enter Limit Short");
+					Print("Entered Short: " + Time[0].ToString());
+					enteredOnCurrentBar = true;
+				}
+				
+				if (Close[0] > recentVaHigh
+					&& Positions[entryIndex].MarketPosition == MarketPosition.Flat)
+				{
+					SetStopLoss(CalculationMode.Ticks, tickLoss);
+					SetProfitTarget(CalculationMode.Ticks, longTickProfit);
+					EnterLongLimit(entryIndex, false, 1, recentVaHigh+TickSize*entryTickTolerance, "Enter Limit Long");
+					Print("Entered Long: " + Time[0].ToString());
+					enteredOnCurrentBar = true;
+				}
+				#endregion
+			}
+			
+			if (BarsInProgress == 0
+				&& !enteredOnCurrentBar)
+			{
+				#region Order Management
+				if (Positions[entryIndex].MarketPosition == MarketPosition.Short)
+					SetStopLoss(CalculationMode.Price, High[0]+TickSize);
+				if (Positions[entryIndex].MarketPosition == MarketPosition.Long)
+					SetStopLoss(CalculationMode.Price, Low[0]-TickSize);
+				#endregion
+			}
+			
+			if (BarsInProgress == 0
+				&& vaAbandonedTrackerList.Count() > 0)
+			{
+				#region ABV Remover
+				string[] splicedValues = vaAbandonedTrackerList[vaAbandonedTrackerList.Count()-1].Split(',');
+				recentVaLow = double.Parse(splicedValues[0].Trim());
+				recentVaHigh = double.Parse(splicedValues[1].Trim());
+				
+				price = Low[0];
+				while (price <= High[0])
+				{
+					if (price >= recentVaLow
+						&& price <= recentVaHigh)
+					{
+						vaAbandonedTrackerList.RemoveAt(0);
+						Print("ABV Destroyed");
+						break;
+					}
+					price = price + TickSize;
+				}
+				#endregion
+			}
+			
+			if (BarsInProgress == 1)
+			{
+				#region OET ABV Removal
+				if (Positions[entryIndex].MarketPosition != MarketPosition.Flat)
+				{
+					if (vaAbandonedTrackerList.Count() > 0)
+						vaAbandonedTrackerList.RemoveAt(0);
+				}
+				#endregion
+			}
+		}
+		
+		#region Properties
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="entryTickTolerance", Order=1, GroupName="Strategy Defaults")]
+		public int entryTickTolerance
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="targetHighLowLookback", Order=2, GroupName="Strategy Defaults")]
+		public int targetHighLowLookback
+		{ get; set; }
+		#endregion
+		
+	}
+}

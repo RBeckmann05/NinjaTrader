@@ -1,0 +1,429 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.Indicators;
+using NinjaTrader.NinjaScript.DrawingTools;
+#endregion
+
+//This namespace holds Strategies in this folder and is required. Do not change it. 
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public class AutoParityTrader : Strategy
+	{
+		#region Price Variation
+		List<double> esCloses = new List<double>();
+		List<double> nqCloses = new List<double>();
+		List<double> distances = new List<double>();
+		List<double> smaFastList = new List<double>();
+		List<double> smaSlowList = new List<double>();
+		double esMean, nqMean, esValue, nqValue, totalValue, esAdj, nqAdj = 0;
+		double meanDistance, stdReturnValue, stdVariance, stdAbove, stdBelow = 0;
+		double esStdReturnValue, esStdVariance, nqStdReturnValue, nqStdVariance;
+		double cumulativeDeviation = 0;
+		bool blockAllEntries = false;
+		
+		double smaFastAverage, smaSlowAverage = 0;
+		bool upTrend, downTrend = false;
+		#endregion
+		
+		#region Cumulative Delta
+		double esCumulativeDelta, nqCumulativeDelta, esSessionVolume, nqSessionVolume, esPerc, nqPerc = 0;
+		double outcome = 0;
+		#endregion
+		
+		#region Current Day OHL
+		double dayOpen = 0;
+		bool enableESLongs, enableNQLongs = false;
+		#endregion
+		
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{
+				Description									= @"Enter the description for your new custom Strategy here.";
+				Name										= "AutoParityTrader";
+				Calculate									= Calculate.OnBarClose;
+				EntriesPerDirection							= 1;
+				EntryHandling								= EntryHandling.AllEntries;
+				IsExitOnSessionCloseStrategy				= true;
+				ExitOnSessionCloseSeconds					= 30;
+				IsFillLimitOnTouch							= false;
+				MaximumBarsLookBack							= MaximumBarsLookBack.TwoHundredFiftySix;
+				OrderFillResolution							= OrderFillResolution.Standard;
+				Slippage									= 0;
+				StartBehavior								= StartBehavior.WaitUntilFlat;
+				TimeInForce									= TimeInForce.Gtc;
+				TraceOrders									= false;
+				RealtimeErrorHandling						= RealtimeErrorHandling.StopCancelClose;
+				StopTargetHandling							= StopTargetHandling.PerEntryExecution;
+				BarsRequiredToTrade							= 20;
+				// Disable this property for performance gains in Strategy Analyzer optimizations
+				// See the Help Guide for additional information
+				IsInstantiatedOnEachOptimizationIteration	= true;
+				
+				stdMultiplier								= 1;
+				priceMAPeriod								= 360;
+				useOutcomeValue								= false;
+				outcomeValue								= 0; //Placeholder
+				useDayLimit									= false;
+				maxCumulativeDeviation						= 10000;
+				
+				trendMode									= true;
+				adjustVolatility							= true;
+				
+				smaFast										= 240;
+				smaSlow										= 480;
+			}
+			else if (State == State.Configure)
+			{
+				AddDataSeries("ES 09-24", Data.BarsPeriodType.Second, 5);
+				AddDataSeries("NQ 09-24", Data.BarsPeriodType.Second, 5);
+				AddDataSeries(null, Data.BarsPeriodType.Minute, 5);
+				AddDataSeries("ES 09-24", Data.BarsPeriodType.Tick, 1);
+				AddDataSeries("NQ 09-24", Data.BarsPeriodType.Tick, 1);
+			}
+		}
+
+		protected override void OnBarUpdate()
+		{
+			#region Strategy
+			if (CurrentBars[1] < 240)
+				return;
+			if (CurrentBars[2] < 240)
+				return;
+			if ((BarsInProgress == 0) && (Bars.IsFirstBarOfSession))
+			{
+				#region Data Clearing
+				esCloses.Clear();
+				nqCloses.Clear();
+				distances.Clear();
+				esSessionVolume = 0;
+				nqSessionVolume = 0;
+				return;
+				#endregion
+			}
+			
+			if (BarsInProgress == 0)
+			{
+				#region Data Gathering
+				esCloses.Add(Closes[1][0]);
+				if (esCloses.Count() > priceMAPeriod
+					&& priceMAPeriod != 0)
+					esCloses.RemoveAt(0);
+				esMean = esCloses.Sum() / esCloses.Count();
+				esStdReturnValue = esCloses.Sum(v => Math.Pow(v - esMean, 2)) / esCloses.Count();
+				esStdVariance = Math.Sqrt(esStdReturnValue);
+				
+				nqCloses.Add(Closes[2][0]);
+				if (nqCloses.Count() > priceMAPeriod
+					&& priceMAPeriod != 0)
+					nqCloses.RemoveAt(0);
+				nqMean = nqCloses.Sum() / nqCloses.Count();
+				nqStdReturnValue = nqCloses.Sum(v => Math.Pow(v - nqMean, 2)) / nqCloses.Count();
+				nqStdVariance = Math.Sqrt(nqStdReturnValue);
+				#endregion
+			}
+			
+			if (BarsInProgress == 0)
+			{
+				dayOpen = CurrentDayOHL().CurrentOpen[0];
+				enableESLongs = false;
+				enableNQLongs = false;
+				blockAllEntries = false;
+				if ((Times[0][0].TimeOfDay < new TimeSpan(7, 30, 0))
+					|| (Times[0][0].TimeOfDay > new TimeSpan(16, 00, 0)))
+					blockAllEntries = true;
+
+				if (Close[0] > dayOpen)
+					enableNQLongs = true;
+				else if (Close[0] < dayOpen)
+					enableESLongs = true;
+				
+				#region Value Calculation
+				if (adjustVolatility)
+				{
+					esValue = (Closes[1][0]*esStdVariance) / (esMean*esMean);
+					nqValue = (Closes[2][0]*nqStdVariance) / (nqMean*nqMean);
+				}				
+				else
+				{
+					esValue = Closes[1][0] / esMean;
+					nqValue = Closes[2][0] / nqMean;
+				}
+				
+				totalValue = esValue - nqValue;
+				
+				#region Regression Mode Standard Deviation of TV
+				if (!trendMode)
+				{
+					distances.Add(totalValue);
+					meanDistance = distances.Sum() / distances.Count();
+					stdReturnValue = distances.Sum(v => Math.Pow(v - meanDistance, 2)) / distances.Count();
+					stdVariance = Math.Sqrt(stdReturnValue);
+					stdAbove = meanDistance + (stdVariance * stdMultiplier);
+					stdBelow = meanDistance - (stdVariance * stdMultiplier);
+				}
+				#endregion
+				
+				#region Trend Mode
+				if (trendMode)
+				{
+					smaFastList.Add(totalValue);
+					smaSlowList.Add(totalValue);
+					if (smaFastList.Count() > smaFast)
+						smaFastList.RemoveAt(0);
+					if (smaSlowList.Count() > smaSlow)
+						smaSlowList.RemoveAt(0);
+					smaFastAverage = smaFastList.Sum() / smaFastList.Count();
+					smaSlowAverage = smaSlowList.Sum() / smaSlowList.Count();
+					
+					upTrend = false;
+					downTrend = false;
+					if (smaFastAverage > smaSlowAverage)
+						upTrend = true;
+					if (smaFastAverage < smaSlowAverage)
+						downTrend = true;
+				}
+				#endregion
+				
+				#endregion
+				
+				#region Cumulative Deviation
+				if (!trendMode)
+				{
+					if (maxCumulativeDeviation != 0)
+					{
+						if (totalValue > stdAbove
+							|| totalValue < stdBelow)
+							cumulativeDeviation = cumulativeDeviation + Math.Max(totalValue - stdAbove, stdBelow - totalValue);
+						
+						if (cumulativeDeviation >= maxCumulativeDeviation)
+							blockAllEntries = false;
+					}
+				}
+				#endregion
+				
+				#region cumulativeDelta
+				esCumulativeDelta = OrderFlowCumulativeDelta(BarsArray[4], CumulativeDeltaType.BidAsk, CumulativeDeltaPeriod.Session, 0).DeltaClose[0];
+				nqCumulativeDelta = OrderFlowCumulativeDelta(BarsArray[5], CumulativeDeltaType.BidAsk, CumulativeDeltaPeriod.Session, 0).DeltaClose[0];
+				esSessionVolume = esSessionVolume + Volumes[1][0];
+				nqSessionVolume = nqSessionVolume + Volumes[2][0];
+				esPerc = esCumulativeDelta / esSessionVolume;
+				nqPerc = nqCumulativeDelta / nqSessionVolume;
+				outcome = esPerc - nqPerc;
+				#endregion
+				// Add system that only takes ES shorts on up days, and NQ shorts on down days
+				// Add way to adjust for the fact NQ does better on up days, ES does better on down days
+				#region Order Execution // Add a mode to just trade NQ. If it reaches stdAbove, long NQ. If it reaches stdBelow, short NQ
+				if (!blockAllEntries)
+				{
+					#region Regression Mode
+					if (!trendMode)
+					{
+						if ((Positions[1].MarketPosition == MarketPosition.Flat)
+							&& (Positions[2].MarketPosition == MarketPosition.Flat))
+						{
+							
+							if ((totalValue >= stdAbove)
+								&& (outcome < outcomeValue*-1 || !useOutcomeValue)
+								&& (enableNQLongs || !useDayLimit)
+								)
+							{
+								Print("ES over valued: " + Time[0].ToString());
+								EnterLong(5, 2, "Long NQ");
+								EnterShort(4, 3, "Short ES");
+							}
+							
+							
+							if (totalValue <= stdBelow
+								&& (outcome > outcomeValue || !useOutcomeValue)
+								&& (enableESLongs || !useDayLimit)
+								)
+							{
+								Print("NQ over valued" + Time[0].ToString());
+								EnterLong(4, 3, "Long ES");
+								EnterShort(5, 2, "Short NQ");
+							}
+						}
+					}
+					#endregion
+					
+				}
+				#endregion
+				
+				#region Order Managemnet
+				
+				#region Regression Mode
+				if (!trendMode)
+				{
+					if (Positions[1].MarketPosition == MarketPosition.Long // Long ES
+						|| Positions[2].MarketPosition == MarketPosition.Short) // Short NQ
+					{
+						if (totalValue > meanDistance) // or 0
+						{
+							//Print("NQ retracted");
+							ExitLong(4, 3, "Exit Long ES", "Long ES");
+							ExitShort(5, 2, "Exit Short NQ", "Short NQ");
+						}
+					}
+					
+					if (Positions[2].MarketPosition == MarketPosition.Long // Long NQ
+						|| Positions[1].MarketPosition == MarketPosition.Short) // Short ES
+					{
+						if (totalValue < meanDistance) // or 0
+						{
+							//Print("ES retracred");
+							ExitLong(5, 2, "Exit Long NQ", "Long NQ");
+							ExitShort(4, 3, "Exit Short ES", "Short ES");
+						}
+					}
+				}
+				#endregion
+				
+				#region EMS
+				
+				if ((Positions[1].MarketPosition == MarketPosition.Flat
+					&& Positions[2].MarketPosition != MarketPosition.Flat)
+					|| (Positions[2].MarketPosition == MarketPosition.Flat
+					&& Positions[1].MarketPosition != MarketPosition.Flat))
+				{
+					ExitLong(1, 1, "Emergency Exit", "Long ES");
+					ExitLong(2, 1, "Emergency Exit", "Long NQ");
+					ExitShort(1, 1, "Emergency Exit", "Short ES");
+					ExitShort(2, 1, "Emergency Exit", "Short NQ");
+				}
+				
+				#endregion
+				
+				#endregion
+			}
+			
+			if (BarsInProgress == 3)
+			{
+				if ((Times[0][0].TimeOfDay > new TimeSpan(7, 30, 0))
+					&& (Times[0][0].TimeOfDay < new TimeSpan(15, 00, 0)))
+				{
+					#region Trend Mode, Execution/Management
+					if (trendMode)
+					{
+						if (upTrend)
+						{
+							if (Positions[1].MarketPosition == MarketPosition.Short
+								|| Positions[2].MarketPosition == MarketPosition.Long)
+							{
+								ExitLongLimit(2, false, 2, Closes[2][0], "Exit Long NQ", "Long NQ");
+								ExitShortLimit(1, false, 3, Closes[1][0], "Exit Short ES", "Short ES");
+							}
+							
+							if (Positions[1].MarketPosition == MarketPosition.Flat
+								&& Positions[2].MarketPosition == MarketPosition.Flat)
+							{
+								EnterLong(1, 3, "Long ES");
+								EnterShort(2, 2, "Short NQ");
+							}
+						}
+						
+						if (downTrend)
+						{
+							if (Positions[1].MarketPosition == MarketPosition.Long
+								|| Positions[2].MarketPosition == MarketPosition.Short)
+							{
+								ExitLongLimit(1, false, 3, Closes[1][0], "Exit Long ES", "Long ES");
+								ExitShortLimit(2, false, 2, Closes[2][0], "Exit Short NQ", "Short NQ");
+							}
+							
+							if (Positions[1].MarketPosition == MarketPosition.Flat
+								&& Positions[2].MarketPosition == MarketPosition.Flat)
+							{
+								EnterLong(2, 2, "Long NQ");
+								EnterShort(1, 3, "Short ES");						
+							}
+						}
+					}
+					#endregion
+				}
+				else
+				{
+				}
+			}
+			
+			#endregion
+		}
+		
+		#region Properties
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="stdMultiplier", Order=1, GroupName="Regression Mode")]
+		public double stdMultiplier
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="priceMAPeriod", Order=2, GroupName="Regression Mode")]
+		public int priceMAPeriod
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="useOutcomeValue", Order=3, GroupName="Regression Mode")]
+		public bool useOutcomeValue
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="outcomeValue", Order=4, GroupName="Regression Mode")]
+		public double outcomeValue
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="useDayLimit", Order=5, GroupName="Regression Mode")]
+		public bool useDayLimit
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="maxCumulativeDeviation", Order=6, GroupName="Regression Mode")]
+		public double maxCumulativeDeviation
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="trendMode", Order=1, GroupName="Strategy Settings")]
+		public bool trendMode
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="adjustVolatility", Order=2, GroupName="Strategy Settings")]
+		public bool adjustVolatility
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="smaFast", Order=1, GroupName="Trend Mode")]
+		public int smaFast
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="smaSlow", Order=2, GroupName="Trend Mode")]
+		public int smaSlow
+		{ get; set; }
+		#endregion
+		
+	}
+}

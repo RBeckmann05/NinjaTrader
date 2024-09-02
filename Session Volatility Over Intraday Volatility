@@ -1,0 +1,208 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.DrawingTools;
+#endregion
+
+//This namespace holds Indicators in this folder and is required. Do not change it. 
+namespace NinjaTrader.NinjaScript.Indicators.BeckFlows
+{
+	public class dailyAtrOverIntraAverageAtr : Indicator
+	{
+		double dayPeriodMA = 90;
+		double intraPeriodMA = 90;
+		double atrRatio = 0;
+		List<double> ratiosList = new List<double>();
+		double ratiosAverage = 0;
+		
+		#region Daily Atr
+		List<double> dayAtrValues = new List<double>();
+		double dayAtr, dayAtrOverClose, dayAtrAverage = 0;
+		#endregion
+		
+		#region Intra Atr
+		List<double> barRangeValues = new List<double>();
+		List<double> intraAtrValues = new List<double>();
+		List<double> dailyIntraAtrValues = new List<double>();
+		double barRange, intraAtr, intraAtrOverClose, intraAtrAverage = 0;
+		double dailyIntraAtrAverage = 0;
+		#endregion
+		
+		
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{
+				Description									= @"Enter the description for your new custom Indicator here.";
+				Name										= "dailyAtrOverIntraAverageAtr";
+				Calculate									= Calculate.OnBarClose;
+				IsOverlay									= false;
+				DisplayInDataBox							= true;
+				DrawOnPricePanel							= true;
+				DrawHorizontalGridLines						= true;
+				DrawVerticalGridLines						= true;
+				PaintPriceMarkers							= true;
+				ScaleJustification							= NinjaTrader.Gui.Chart.ScaleJustification.Right;
+				//Disable this property if your indicator requires custom values that cumulate with each new market data event. 
+				//See Help Guide for additional information.
+				IsSuspendedWhileInactive					= true;
+				baseNumber									= 60;
+				
+				AddPlot(Brushes.Yellow, "ratioPlot");
+				AddPlot(Brushes.White, "basePlot");
+			}
+			else if (State == State.Configure)
+			{
+				AddDataSeries(Data.BarsPeriodType.Minute, 3);
+			}
+		}
+
+		protected override void OnBarUpdate()
+		{
+			if (BarsInProgress == 0)
+			{
+				dayAtr = ATR(10)[0];
+				dayAtrOverClose = dayAtr / Close[0];
+				dayAtrValues.Add(dayAtrOverClose);
+				
+				if ((dayAtrValues.Count() > dayPeriodMA)
+					&& (dayPeriodMA != 0))
+					dayAtrValues.RemoveAt(0);
+				dayAtrAverage = dayAtrValues.Sum()*10 / dayAtrValues.Count();
+			}
+			
+			if (BarsInProgress == 1)
+			{
+				barRange = Highs[1][0] - Lows[1][0];
+				barRangeValues.Add(barRange);
+				
+				if (barRangeValues.Count() > 10)
+					barRangeValues.RemoveAt(0);
+				
+				intraAtr = barRangeValues.Sum() / barRangeValues.Count();
+				
+				intraAtrOverClose = intraAtr / Closes[1][0];
+				intraAtrValues.Add(intraAtrOverClose);
+				
+				if (intraAtrValues.Count() > 30)
+					intraAtrValues.RemoveAt(0);
+				
+				intraAtrAverage = intraAtrValues.Sum()*100 / intraAtrValues.Count();
+			}
+			
+			if (BarsInProgress == 0)
+			{			
+				dailyIntraAtrValues.Add(intraAtrAverage);
+				if ((dailyIntraAtrValues.Count > intraPeriodMA)
+					&& (intraPeriodMA != 0))
+					dailyIntraAtrValues.RemoveAt(0);
+				dailyIntraAtrAverage = dailyIntraAtrValues.Sum() / dailyIntraAtrValues.Count();
+			}
+			
+			if (BarsInProgress == 0)
+			{
+				atrRatio = dayAtrAverage / dailyIntraAtrAverage;
+				ratiosList.Add(atrRatio);
+				ratiosAverage = ratiosList.Sum() / ratiosList.Count();
+				ratioPlot[0] = atrRatio;
+				if (ratiosList.Count() > baseNumber)
+					ratiosList.RemoveAt(0);
+				basePlot[0] = ratiosAverage;
+			}
+		}
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="baseNumber", Order=1, GroupName="Set Defaults")]
+		public double baseNumber
+		{ get; set; }
+		
+		[Browsable(false)]
+		[XmlIgnore]
+		public Series<double> ratioPlot
+		{
+			get { return Values[0]; }
+		}
+		
+		[Browsable(false)]
+		[XmlIgnore]
+		public Series<double> basePlot
+		{
+			get { return Values[1]; }
+		}
+	}
+}
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private BeckFlows.dailyAtrOverIntraAverageAtr[] cachedailyAtrOverIntraAverageAtr;
+		public BeckFlows.dailyAtrOverIntraAverageAtr dailyAtrOverIntraAverageAtr(double baseNumber)
+		{
+			return dailyAtrOverIntraAverageAtr(Input, baseNumber);
+		}
+
+		public BeckFlows.dailyAtrOverIntraAverageAtr dailyAtrOverIntraAverageAtr(ISeries<double> input, double baseNumber)
+		{
+			if (cachedailyAtrOverIntraAverageAtr != null)
+				for (int idx = 0; idx < cachedailyAtrOverIntraAverageAtr.Length; idx++)
+					if (cachedailyAtrOverIntraAverageAtr[idx] != null && cachedailyAtrOverIntraAverageAtr[idx].baseNumber == baseNumber && cachedailyAtrOverIntraAverageAtr[idx].EqualsInput(input))
+						return cachedailyAtrOverIntraAverageAtr[idx];
+			return CacheIndicator<BeckFlows.dailyAtrOverIntraAverageAtr>(new BeckFlows.dailyAtrOverIntraAverageAtr(){ baseNumber = baseNumber }, input, ref cachedailyAtrOverIntraAverageAtr);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.BeckFlows.dailyAtrOverIntraAverageAtr dailyAtrOverIntraAverageAtr(double baseNumber)
+		{
+			return indicator.dailyAtrOverIntraAverageAtr(Input, baseNumber);
+		}
+
+		public Indicators.BeckFlows.dailyAtrOverIntraAverageAtr dailyAtrOverIntraAverageAtr(ISeries<double> input , double baseNumber)
+		{
+			return indicator.dailyAtrOverIntraAverageAtr(input, baseNumber);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.BeckFlows.dailyAtrOverIntraAverageAtr dailyAtrOverIntraAverageAtr(double baseNumber)
+		{
+			return indicator.dailyAtrOverIntraAverageAtr(Input, baseNumber);
+		}
+
+		public Indicators.BeckFlows.dailyAtrOverIntraAverageAtr dailyAtrOverIntraAverageAtr(ISeries<double> input , double baseNumber)
+		{
+			return indicator.dailyAtrOverIntraAverageAtr(input, baseNumber);
+		}
+	}
+}
+
+#endregion

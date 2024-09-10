@@ -1,0 +1,217 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.Indicators;
+using NinjaTrader.NinjaScript.DrawingTools;
+#endregion
+
+//This namespace holds Strategies in this folder and is required. Do not change it. 
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public class IntraDayBreakouts : Strategy
+	{
+		List<double> highList = new List<double>();
+		List<double> lowList = new List<double>();
+		List<double> maFastList = new List<double>();
+		List<double> maSlowList = new List<double>();
+		List<double> maDistanceList = new List<double>();
+		double stopDistance = 0;
+		double maFast, maSlow, maDistance = 0;
+		double recentHigh, recentLow = 0;
+		double atr = 0;
+		bool marketRanging = false;
+		bool enteredOnCurrentBar = false;
+		
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{
+				Description									= @"Enter the description for your new custom Strategy here.";
+				Name										= "IntraDayBreakouts";
+				Calculate									= Calculate.OnEachTick;
+				EntriesPerDirection							= 1;
+				EntryHandling								= EntryHandling.AllEntries;
+				IsExitOnSessionCloseStrategy				= true;
+				ExitOnSessionCloseSeconds					= 30;
+				IsFillLimitOnTouch							= false;
+				MaximumBarsLookBack							= MaximumBarsLookBack.TwoHundredFiftySix;
+				OrderFillResolution							= OrderFillResolution.Standard;
+				Slippage									= 0;
+				StartBehavior								= StartBehavior.WaitUntilFlat;
+				TimeInForce									= TimeInForce.Gtc;
+				TraceOrders									= false;
+				RealtimeErrorHandling						= RealtimeErrorHandling.IgnoreAllErrors;
+				StopTargetHandling							= StopTargetHandling.PerEntryExecution;
+				BarsRequiredToTrade							= 20;
+				// Disable this property for performance gains in Strategy Analyzer optimizations
+				// See the Help Guide for additional information
+				IsInstantiatedOnEachOptimizationIteration	= true;
+
+				highLowLookback								= 10; // 15
+				rangeFactor 								= 2; // 3
+				rewardRisk									= 15; // 15
+				riskFactor									= 2; // 1
+				entryAtrReq									= .1;
+				
+				AddPlot(new Stroke(Brushes.White, 2), PlotStyle.Line, "abovePlot");
+				AddPlot(new Stroke(Brushes.White, 2), PlotStyle.Line, "belowPlot");
+			}
+			else if (State == State.Configure)
+			{
+			}
+		}
+
+		protected override void OnBarUpdate()
+		{
+			if (CurrentBar < 2)
+				return;
+			
+			if (BarsInProgress == 0 && IsFirstTickOfBar)
+			{
+				enteredOnCurrentBar = false;
+				
+				#region Data Gathering
+				atr = ATR(10)[1];
+				
+				highList.Add(High[1]);
+				if (highList.Count() > highLowLookback)
+					highList.RemoveAt(0);
+				lowList.Add(Low[1]);
+				if (lowList.Count() > highLowLookback)
+					lowList.RemoveAt(0);
+				recentHigh = highList.Max();
+				recentLow = lowList.Min();
+				
+				abovePlot[0] = recentHigh;
+				belowPlot[0] = recentLow;
+				if ((recentHigh - recentLow) < atr*rangeFactor)
+					marketRanging = true;
+				else
+					marketRanging = false;
+				if (marketRanging)
+				{
+					PlotBrushes[0][0] = Brushes.Cyan;
+					PlotBrushes[1][0] = Brushes.Cyan;
+				}
+				#endregion
+			}
+			
+			if (BarsInProgress == 0 
+				&& marketRanging
+				&& !enteredOnCurrentBar
+				&& Position.MarketPosition == MarketPosition.Flat)
+			{
+				#region Order Execution
+				if (riskFactor != 0)
+				{
+					stopDistance = atr*riskFactor*(1/TickSize);
+					SetStopLoss(CalculationMode.Ticks, stopDistance);
+					SetProfitTarget(CalculationMode.Ticks, stopDistance*rewardRisk);
+				}
+				if (Close[0] > recentHigh+atr*entryAtrReq)
+				{
+					if (riskFactor == 0)
+					{
+						stopDistance = Close[0]-(recentLow-TickSize);
+						SetStopLoss(CalculationMode.Price, recentLow);
+						SetProfitTarget(CalculationMode.Ticks, stopDistance*rewardRisk);
+					}
+					EnterLong();
+					Print("Entered Long: " + Time[0]);
+				}
+				
+				if (Close[0] < recentLow-atr*entryAtrReq)
+				{
+					if (riskFactor == 0)
+					{
+						stopDistance = (recentHigh+TickSize) - Close[0];
+						SetStopLoss(CalculationMode.Price, recentHigh);
+						SetProfitTarget(CalculationMode.Ticks, stopDistance*rewardRisk);
+					}
+					EnterShort();
+					Print("Entered Short: " + Time[0]);
+				}
+				#endregion
+			}
+			
+			#region Experimental
+			/*
+			if (BarsInProgress == 0
+				&& IsFirstTickOfBar
+				&& marketRanging
+				&& riskFactor == 0
+				&& Position.MarketPosition != MarketPosition.Flat)
+			{
+				if (Position.MarketPosition == MarketPosition.Long)
+					SetStopLoss(CalculationMode.Price, recentLow);
+				if (Position.MarketPosition == MarketPosition.Short)
+					SetStopLoss(CalculationMode.Price, recentHigh);
+			}
+			*/
+			#endregion
+		}
+		
+		#region Properties
+		[Browsable(false)]
+		[XmlIgnore]
+		public Series<double> abovePlot
+		{
+			get { return Values[0]; }
+		}
+		
+		[Browsable(false)]
+		[XmlIgnore]
+		public Series<double> belowPlot
+		{
+			get { return Values[1]; }
+		}
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="highLowLookback", Order=1, GroupName="Strategy Settings")]
+		public int highLowLookback
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="rangeFactor", Order=2, GroupName="Strategy Settings")]
+		public double rangeFactor
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="rewardRisk", Order=3, GroupName="Strategy Settings")]
+		public double rewardRisk
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="riskFactor", Order=4, GroupName="Strategy Settings")]
+		public double riskFactor
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="entryAtrReq", Order=5, GroupName="Strategy Settings")]
+		public double entryAtrReq
+		{ get; set; }
+		#endregion
+	}
+}

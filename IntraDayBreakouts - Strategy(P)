@@ -167,6 +167,30 @@ namespace NinjaTrader.NinjaScript.Strategies
 			*/
 			#endregion
 		}
+
+		protected override void OnPositionUpdate(Position position, double averagePrice, int quantity, MarketPosition marketPosition)
+		{
+			#region OPU
+			if (Position.MarketPosition == MarketPosition.Flat && SystemPerformance.AllTrades.Count > 0)
+			{
+				currentPnL += SystemPerformance.AllTrades[SystemPerformance.AllTrades.Count - 1].ProfitCurrency;
+				currentPnL = Math.Round(currentPnL, 2);
+				PrintTo = PrintTo.OutputTab2;
+				Print(Time[0].ToString() + " PnL: " + currentPnL.ToString());
+				PrintTo = PrintTo.OutputTab1;
+			}
+			#endregion
+		}
+		
+		protected override void OnOrderUpdate(Order order, double limitPrice, double stopPrice, int quantity, int filled, double averageFillPrice, OrderState orderState, DateTime time, ErrorCode error, string nativeError)
+		{
+			#region OOU
+			if (order != null)
+			{
+		      Print(order.ToString());
+			}
+			#endregion
+		}
 		
 		#region Properties
 		[Browsable(false)]

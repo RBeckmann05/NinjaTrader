@@ -1,0 +1,364 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.Indicators;
+using NinjaTrader.NinjaScript.DrawingTools;
+#endregion
+
+//This namespace holds Strategies in this folder and is required. Do not change it. 
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public class CombinedStrategy : Strategy
+	{
+		#region IDB
+		List<double> highList = new List<double>();
+		List<double> lowList = new List<double>();
+		double stopDistance, stopPrice = 0;
+		double recentHigh, recentLow = 0;
+		double atr = 0;
+		bool marketRanging = false;
+		bool enteredOnCurrentBar = false;
+		bool enteredOnPreviousBar = false;
+		double entryPrice = 0;
+		double stopLossPlotPrice = 0;
+		bool disableStrategy = false;
+		#endregion
+		
+		#region CTS
+		List<double> dailyMA = new List<double>();
+		double highestHigh, lowestLow, ctsAtr, dailyAvg = 0;
+		int barNumberOfOrder = 0;
+		bool newHigh, newLow, blockTrades = false;
+		double risk = 0;
+		private Order longOrder = null;
+		private Order shortOrder = null;
+		#endregion
+		
+		#region Value Area
+		int rotationFactor = 0;
+		double vaMaximum = 0;
+		double vaMaximumPrice = 0;
+		double cumulativeBarVolume = 0;
+		double totalBarVolume = 0;
+		double volume = 0;
+		List<double> pricesforvaluearea = new List<double>();
+		double vaLow = 0;
+		double vaHigh = 0;
+		bool vaTouched = false;
+		#endregion
+		
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{
+				Description									= @"Enter the description for your new custom Strategy here.";
+				Name										= "CombinedStrategy";
+				Calculate									= Calculate.OnEachTick;
+				EntriesPerDirection							= 1;
+				EntryHandling								= EntryHandling.AllEntries;
+				IsExitOnSessionCloseStrategy				= true;
+				ExitOnSessionCloseSeconds					= 30;
+				IsFillLimitOnTouch							= false;
+				MaximumBarsLookBack							= MaximumBarsLookBack.TwoHundredFiftySix;
+				OrderFillResolution							= OrderFillResolution.Standard;
+				Slippage									= 0;
+				StartBehavior								= StartBehavior.WaitUntilFlat;
+				TimeInForce									= TimeInForce.Gtc;
+				TraceOrders									= false;
+				RealtimeErrorHandling						= RealtimeErrorHandling.StopCancelClose;
+				StopTargetHandling							= StopTargetHandling.PerEntryExecution;
+				BarsRequiredToTrade							= 20;
+				// Disable this property for performance gains in Strategy Analyzer optimizations
+				// See the Help Guide for additional information
+				IsInstantiatedOnEachOptimizationIteration	= true;
+				
+				#region IDB
+				highLowLookback								= 10; // 15 ///5
+				rangeFactor 								= 2; // 3 ///2
+				rewardRisk									= 15; // 15 ///30
+				riskFactor									= 2; // 1 ///1
+				entryAtrReq									= .1; ///.1
+				entryQuantity								= 1;
+				
+				disableShorts								= false; // true ///true
+				autoScale									= false;
+				#endregion
+				
+				#region CTS
+				lookbackPeriod								= 20;
+				atrPeriod									= 20;
+				entryAtrMultiplier							= 2;
+				exitAtrMultiplier							= 2.5;
+				maxWait										= 35;
+				riskReward									= 0;
+				useLiveUpdate								= true;
+				#endregion
+				
+			}
+			else if (State == State.Configure)
+			{
+				AddDataSeries(null, Data.BarsPeriodType.Tick, 1);
+				AddDataSeries(null, Data.BarsPeriodType.Day, 1);
+			}
+		}
+
+		protected override void OnBarUpdate()
+		{
+			if (CurrentBars[0] < highLowLookback+2)
+				return;
+			if (CurrentBars[1] < 2)
+				return;
+			if (CurrentBar < 20)
+				return;
+			
+			#region IDB
+			if (BarsInProgress == 0 && IsFirstTickOfBar)
+			{	
+				if (enteredOnCurrentBar)
+				{
+					enteredOnPreviousBar = true;
+				}
+				enteredOnCurrentBar = false;
+				
+				#region Data Gathering
+				atr = ATR(10)[1];				
+				highList.Add(High[1]);
+				if (highList.Count() > highLowLookback)
+					highList.RemoveAt(0);
+				lowList.Add(Low[1]);
+				if (lowList.Count() > highLowLookback)
+					lowList.RemoveAt(0);
+				recentHigh = highList.Max();
+				recentLow = lowList.Min();
+				
+				if ((recentHigh - recentLow) < atr*rangeFactor)
+					marketRanging = true;
+				else
+					marketRanging = false;
+				#endregion
+				
+			}
+			
+			if (BarsInProgress == 0 
+				&& marketRanging
+				&& !enteredOnCurrentBar)
+				//&& Position.MarketPosition == MarketPosition.Flat)
+			{
+				#region Order Execution
+				if (riskFactor != 0)
+				{
+					stopDistance = atr*riskFactor*(1/TickSize);
+					SetStopLoss("IDB Long", CalculationMode.Ticks, stopDistance, false);
+					SetProfitTarget("IDB Long", CalculationMode.Ticks, stopDistance*rewardRisk);
+				}
+				if (Close[0] > recentHigh+atr*entryAtrReq)
+				{
+					if (riskFactor == 0)
+					{
+						stopDistance = Close[0]-(recentLow-TickSize);
+						SetStopLoss("IDB Long", CalculationMode.Price, recentLow, false);
+						SetProfitTarget("IDB Long", CalculationMode.Ticks, stopDistance*rewardRisk);
+					}				
+					entryPrice = Close[0];
+					stopLossPlotPrice = entryPrice - stopDistance/(1/TickSize);
+					EnterLong(1, entryQuantity, "IDB Long");
+					enteredOnCurrentBar = true;
+					Print("Entered Long: " + Time[0]);
+				}
+				#endregion
+			}
+			#endregion
+			
+			#region CTS
+			if (BarsInProgress == 0
+				&& IsFirstTickOfBar)
+			{
+				#region Data Collection
+				blockTrades = false;
+				ctsAtr = ATR(atrPeriod)[1];
+				highestHigh = MAX(High, lookbackPeriod)[2];
+				lowestLow = MIN(Low, lookbackPeriod)[2];
+				
+				if ((atr/Close[1] > .006 || atr/Close[1] < .0006)
+					|| (ADX(20)[1] < 15 || ADX(20)[1] > 40))
+					blockTrades = true;
+				else
+					blockTrades = false;
+				#endregion
+				
+				if (BarsInProgress == 0)
+				{
+					#region Data Collection
+					if (High[1] > highestHigh)
+						newHigh = true;
+					else
+						newHigh = false;
+					
+					if (Low[1] < lowestLow)
+						newLow = true;
+					else
+						newLow = false;
+					#endregion
+					
+					if (newHigh)
+					{
+						#region Order Execution
+						if (Position.MarketPosition == MarketPosition.Flat
+							|| useLiveUpdate)
+						{
+							risk = 4*(atr*exitAtrMultiplier);
+							if (riskReward != 0)
+								SetProfitTarget(CalculationMode.Ticks, risk*riskReward);
+							
+							SetStopLoss("CTS Long", CalculationMode.Price, Low[1]-atr*entryAtrMultiplier*exitAtrMultiplier, false);
+							if (!blockTrades)
+								EnterLongLimit(1, true, 1, Low[1]-atr*entryAtrMultiplier, "CTS Long");
+							barNumberOfOrder = CurrentBar;
+						}
+						#endregion
+					}
+		
+					if (Position.MarketPosition == MarketPosition.Flat)
+					{
+						#region Order Cancelling
+						if (CurrentBar > barNumberOfOrder + maxWait)
+						{
+							CancelOrder(longOrder);
+							CancelOrder(shortOrder);
+						}
+						#endregion
+					}
+				}
+			}
+			#endregion
+		}	
+		
+		protected override void OnOrderUpdate(Order order, double limitPrice, double stopPrice, int quantity, int filled,
+		  double averageFillPrice, OrderState orderState, DateTime time, ErrorCode error, string nativeError)
+		{
+		  // Assign entryOrder in OnOrderUpdate() to ensure the assignment occurs when expected.
+		  // This is more reliable than assigning Order objects in OnBarUpdate, as the assignment is not gauranteed to be complete if it is referenced immediately after submitting
+		  if (order.Name == "CTS Long")
+		      longOrder = order;
+		 
+		  // Evaluates for all updates to myEntryOrder.
+		  if (longOrder != null && longOrder == order)
+		  {
+		      // Check if myEntryOrder is cancelled.
+		      if (longOrder.OrderState == OrderState.Cancelled)
+		      {
+		          // Reset myEntryOrder back to null
+		          longOrder = null;
+		      }
+		  }
+		}
+		
+		#region IDB Properties
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="highLowLookback", Order=1, GroupName="IDB Strategy Settings")]
+		public int highLowLookback
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="rangeFactor", Order=2, GroupName="IDB Strategy Settings")]
+		public double rangeFactor
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="rewardRisk", Order=3, GroupName="IDB Strategy Settings")]
+		public double rewardRisk
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="riskFactor", Order=4, GroupName="IDB Strategy Settings")]
+		public double riskFactor
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="entryAtrReq", Order=5, GroupName="IDB Strategy Settings")]
+		public double entryAtrReq
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="disableShorts", Order=1, GroupName="IDB Global Settings")]
+		public bool disableShorts
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="entryQuantity", Order=2, GroupName="IDB Global Settings")]
+		public int entryQuantity
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="autoScale", Order=3, GroupName="IDB Global Settings")]
+		public bool autoScale
+		{ get; set; }
+		#endregion
+		
+		#region CTS Properties
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="lookbackPeriod", Order=1, GroupName="CTS General Information")]
+		public int lookbackPeriod
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="atrPeriod", Order=2, GroupName="CTS General Information")]
+		public int atrPeriod
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="entryAtrMultiplier", Order=3, GroupName="CTS General Information")]
+		public double entryAtrMultiplier
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="exitAtrMultiplier", Order=4, GroupName="CTS General Information")]
+		public double exitAtrMultiplier
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(1, int.MaxValue)]
+		[Display(Name="maxWait", Order=5, GroupName="CTS General Information")]
+		public int maxWait
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Display(Name="useLiveUpdate", Order=7, GroupName="CTS General Information")]
+		public bool useLiveUpdate
+		{ get; set; }
+		
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name="riskReward", Order=8, GroupName="CTS General Information")]
+		public double riskReward
+		{ get; set; }
+		#endregion
+	}
+}
